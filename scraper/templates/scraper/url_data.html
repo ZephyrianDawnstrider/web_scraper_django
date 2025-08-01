@@ -1,0 +1,23 @@
+{% extends "scraper/base.html" %}
+
+{% block title %}Scraped Data for {{ url }}{% endblock %}
+
+{% block content %}
+<h2>Page Data for URL: {{ url }}</h2>
+<p>Total Words: {{ entries|length }}</p>
+<table>
+    <tr>
+        <th>Heading/Tag</th>
+        <th>Content</th>
+        <th>Word Count</th>
+    </tr>
+    {% for item in entries %}
+    <tr>
+        <td>{{ item.HeadingTag }}</td>
+        <td class="content-cell">{{ item.Content }}</td>
+        <td>{{ item.WordCount }}</td>
+    </tr>
+    {% endfor %}
+</table>
+<a href="{% url 'view_data' %}">Back to All Data</a>
+{% endblock %}

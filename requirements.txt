@@ -1,0 +1,5 @@
+ Django>=4.0
+selenium
+beautifulsoup4
+pandas
+openpyxl

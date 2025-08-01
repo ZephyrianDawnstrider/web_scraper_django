@@ -1,0 +1,208 @@
+{% extends "scraper/base.html" %}
+
+{% block title %}Scraped Data{% endblock %}
+
+{% block content %}
+    <style>
+        table, th, td {
+            border: 1px solid black;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 8px;
+        }
+        .urls-list {
+            max-height: 150px;
+            max-width: 300px; /* Limit width */
+            overflow: hidden; /* Hide scrollbar */
+            padding-left: 15px;
+            margin: 0;
+        }
+        .urls-list li {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 2px 0;
+        }
+        .urls-list li a {
+            color: black; /* Change link color to black */
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .urls-list li a:hover {
+            text-decoration: underline;
+        }
+        .tooltip {
+            position: relative;
+            display: inline-block;
+        }
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: max-content;
+            max-width: 300px;
+            background-color: #555;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px 8px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -150px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            word-wrap: break-word;
+        }
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+    </style>
+    <div style="display:flex;">
+        <div style="width: 250px; border-right: 1px solid #ddd; padding-right: 10px; position: relative;">
+            <h3>URLs</h3>
+            <div class="url-preview tooltip" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; color: black; position: relative;">
+                {% if url_headings %}
+                    {% with first_url=url_headings|dictsort:"0"|first %}
+                        <a href="{% url 'url_data' first_url.0|slugify %}" style="color: black; text-decoration: none;">
+                            {{ first_url.1|truncatechars:40 }}
+                        </a>
+                        <span class="tooltiptext" id="url-list-tooltip" style="max-width: 400px; overflow-y: auto; max-height: 200px; display: none; background-color: #fff; color: #000; border: 1px solid #ccc; padding: 10px; position: absolute; top: 100%; left: 0; z-index: 1000; white-space: normal; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+                            <ul style="list-style:none; padding-left: 0; margin: 0; max-height: 200px; overflow-y: auto;">
+                                {% for url, heading in url_headings.items %}
+                                    <li style="padding: 5px 0;">
+                                        <a href="{% url 'url_data' url|slugify %}" style="color: black; text-decoration: none;">
+                                            {{ heading }}
+                                        </a>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        </span>
+                    {% endwith %}
+                {% endif %}
+            </div>
+            <ul style="list-style:none; padding-left:0; display:none;">
+                <li><a href="{% url 'view_data' %}">All</a></li>
+                {% for url, heading in url_headings.items %}
+                <li><a href="{% url 'url_data' url|slugify %}">{{ heading }}</a></li>
+                {% endfor %}
+                <li><a href="{% url 'download' %}">Download Excel</a></li>
+            </ul>
+        </div>
+        <div style="flex-grow:1; padding-left: 20px;">
+            {% if common_data %}
+                <h2>Common Data</h2>
+                <table>
+                    <tr>
+                        <th style="max-width: 300px;">URLs</th>
+                        <th>Content</th>
+                        <th>Word Count</th>
+                    </tr>
+                    {% for item in common_data %}
+                    <tr>
+                        <td class="urls-cell" style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            <ul class="urls-list">
+                                {% for url in item.URLs %}
+                                <li class="tooltip">
+                                    <a href="{% url 'url_data' url|slugify %}">{{ url|truncatechars:40 }}</a>
+                                    <span class="tooltiptext">{{ url }}</span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </td>
+                        <td class="content-cell">{{ item.Content }}</td>
+                        <td>{{ item.WordCount }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            {% endif %}
+
+            {% if grouped_filtered_data %}
+                <h2>Page Data (Grouped by URL)</h2>
+                {% for url, data in grouped_filtered_data.items %}
+                    <h3>URL: {{ url }}</h3>
+                    <p>Total Words: {{ data.total_words }}</p>
+                    <table>
+                        <tr>
+                            <th>Heading/Tag</th>
+                            <th>Content</th>
+                            <th>Word Count</th>
+                        </tr>
+                        {% for item in data.entries %}
+                        <tr>
+                            <td>{{ item.HeadingTag }}</td>
+                            <td class="content-cell">{{ item.Content }}</td>
+                            <td>{{ item.WordCount }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                {% endfor %}
+            {% elif grouped_scraped_data %}
+                <h2>Page Data (Grouped by URL)</h2>
+                {% for url, data in grouped_scraped_data.items %}
+                    <h3>URL: {{ url }}</h3>
+                    <p>Total Words: {{ data.total_words }}</p>
+                    <table>
+                        <tr>
+                            <th>Heading/Tag</th>
+                            <th>Content</th>
+                            <th>Word Count</th>
+                        </tr>
+                        {% for item in data.entries %}
+                        <tr>
+                            <td>{{ item.HeadingTag }}</td>
+                            <td class="content-cell">{{ item.Content }}</td>
+                            <td>{{ item.WordCount }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                {% endfor %}
+            {% endif %}
+
+            {% if filtered_data %}
+                <h2>Page Data</h2>
+                <table>
+                    <tr>
+                        <th>URL</th>
+                        <th>Page Name</th>
+                        <th>Heading/Tag</th>
+                        <th>Content</th>
+                        <th>Word Count</th>
+                    </tr>
+                    {% for row in filtered_data %}
+                    <tr>
+                        <td>{{ row.URL }}</td>
+                        <td>{{ row.PageName }}</td>
+                        <td>{{ row.HeadingTag }}</td>
+                        <td>{{ row.Content }}</td>
+                        <td>{{ row.WordCount }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            {% elif scraped_data %}
+                <h2>Page Data</h2>
+                <table>
+                    <tr>
+                        <th>URL</th>
+                        <th>Page Name</th>
+                        <th>Heading/Tag</th>
+                        <th>Content</th>
+                        <th>Word Count</th>
+                    </tr>
+                    {% for row in scraped_data %}
+                    <tr>
+                        <td>{{ row.URL }}</td>
+                        <td>{{ row.PageName }}</td>
+                        <td>{{ row.HeadingTag }}</td>
+                        <td>{{ row.Content }}</td>
+                        <td>{{ row.WordCount }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            {% endif %}
+        </div>
+    </div>
+    <a href="{% url 'index' %}">Go back</a>
+{% endblock %}
+

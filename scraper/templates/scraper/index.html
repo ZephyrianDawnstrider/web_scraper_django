@@ -1,0 +1,29 @@
+{% extends "scraper/base.html" %}
+
+{% block title %}Website Content Scraper{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 600px; margin: 50px auto; background: white; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-radius: 8px;">
+    <h1 style="text-align: center; color: #333;">Website Content Scraper</h1>
+    <form id="scrapeForm" method="post" style="display: flex; flex-direction: column; gap: 20px;">
+        {% csrf_token %}
+        <label for="url" style="font-weight: bold; color: #555;">Enter URL to scrape:</label>
+        <input type="text" id="url" name="url" required style="padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box;" />
+        <label class="checkbox-label" style="display: flex; align-items: center; font-weight: normal; color: #555;">
+            <input type="checkbox" name="show_common" style="transform: scale(1.2); margin-right: 10px;" /> Show common data separately
+        </label>
+        <input type="submit" value="Start Scraping" style="background-color: #007bff; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 4px; cursor: pointer; transition: background-color 0.3s ease;" onmouseover="this.style.backgroundColor='#0056b3'" onmouseout="this.style.backgroundColor='#007bff'" />
+    </form>
+    <div id="loader" style="display:none; text-align:center; margin-top:20px;">
+        <p>Scraping in progress, please wait...</p>
+    </div>
+</div>
+
+<script>
+document.getElementById('scrapeForm').addEventListener('submit', function(event) {
+    event.preventDefault();
+    document.getElementById('loader').style.display = 'block';
+    this.submit();
+});
+</script>
+{% endblock %}
