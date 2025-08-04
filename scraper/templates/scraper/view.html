@@ -60,28 +60,32 @@
         }
     </style>
     <div style="display:flex;">
-        <div style="width: 250px; border-right: 1px solid #ddd; padding-right: 10px; position: relative;">
-            <h3>URLs</h3>
+        {% comment %}<div style="width: 250px; border-right: 1px solid #ddd; padding-right: 10px; position: relative;">
+             <h3>URLs</h3>
             <div class="url-preview tooltip" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; color: black; position: relative;">
                 {% if url_headings %}
                     {% with first_url=url_headings|dictsort:"0"|first %}
-                        <a href="{% url 'url_data' first_url.0|slugify %}" style="color: black; text-decoration: none;">
-                            {{ first_url.1|truncatechars:40 }}
-                        </a>
-                        <span class="tooltiptext" id="url-list-tooltip" style="max-width: 400px; overflow-y: auto; max-height: 200px; display: none; background-color: #fff; color: #000; border: 1px solid #ccc; padding: 10px; position: absolute; top: 100%; left: 0; z-index: 1000; white-space: normal; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
-                            <ul style="list-style:none; padding-left: 0; margin: 0; max-height: 200px; overflow-y: auto;">
-                                {% for url, heading in url_headings.items %}
-                                    <li style="padding: 5px 0;">
-                                        <a href="{% url 'url_data' url|slugify %}" style="color: black; text-decoration: none;">
-                                            {{ heading }}
-                                        </a>
-                                    </li>
-                                {% endfor %}
-                            </ul>
-                        </span>
+                        {% if first_url.0 %}
+                            <a href="{% url 'url_data' first_url.0|slugify %}" style="color: black; text-decoration: none;">
+                                {{ first_url.1|truncatechars:40 }}
+                            </a>
+                            <span class="tooltiptext" id="url-list-tooltip" style="max-width: 400px; overflow-y: auto; max-height: 200px; display: none; background-color: #fff; color: #000; border: 1px solid #ccc; padding: 10px; position: absolute; top: 100%; left: 0; z-index: 1000; white-space: normal; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+                                <ul style="list-style:none; padding-left: 0; margin: 0; max-height: 200px; overflow-y: auto;">
+                                    {% for url, heading in url_headings.items %}
+                                        {% if url %}
+                                            <li style="padding: 5px 0;">
+                                                <a href="{% url 'url_data' url|slugify %}" style="color: black; text-decoration: none;">
+                                                    {{ heading }}
+                                                </a>
+                                            </li>
+                                        {% endif %}
+                                    {% endfor %}
+                                </ul>
+                            </span>
+                        {% endif %}
                     {% endwith %}
                 {% endif %}
-            </div>
+            </div> {% endcomment %}
             <ul style="list-style:none; padding-left:0; display:none;">
                 <li><a href="{% url 'view_data' %}">All</a></li>
                 {% for url, heading in url_headings.items %}

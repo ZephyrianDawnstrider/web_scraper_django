@@ -1,8 +1,10 @@
 import os
 import threading
 import time
+import logging
 from urllib.parse import urlparse, urljoin
 from collections import defaultdict
+from urllib.robotparser import RobotFileParser
 
 from django.shortcuts import render, redirect
 from django.http import HttpResponse, FileResponse
@@ -10,12 +12,24 @@ from django.conf import settings
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from bs4 import BeautifulSoup
 import pandas as pd
+
+# Setup logger
+logger = logging.getLogger('scraper')
+if not logger.hasHandlers():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Global variables to store scraped data and common data flag
 scraped_data = []
 show_common_data = False
+
+USER_AGENT = "YourTranslationCrawler/1.0 (info@yourcompany.com)"
+MAX_CRAWL_DEPTH = 5
+REQUEST_DELAY = 10  # seconds
+PAGE_LOAD_TIMEOUT = 30  # seconds
+MAX_PAGE_SIZE = 10 * 1024 * 1024 # 10 MB
 
 def create_driver():
     options = Options()
@@ -23,6 +37,7 @@ def create_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     driver = webdriver.Chrome(options=options)
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
     return driver
 
 def is_valid_url(url, base_netloc):
@@ -32,39 +47,138 @@ def is_valid_url(url, base_netloc):
     except:
         return False
 
+def get_robot_parser(base_url):
+    rp = RobotFileParser()
+    robots_txt_url = urljoin(base_url, '/robots.txt')
+    try:
+        rp.set_url(robots_txt_url)
+        rp.read()
+        logger.info(f"Fetched robots.txt from {robots_txt_url}")
+        return rp
+    except Exception as e:
+        logger.warning(f"Error fetching/parsing robots.txt for {base_url}: {e}")
+        return None
+
 def get_page_name(soup):
     if soup.title:
         return soup.title.string.strip()
     return "No Title"
 
-def extract_content(soup):
+def extract_content(soup, url):
     content = []
-    for tag in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p']):
-        text = tag.get_text(strip=True)
-        if text:
-            content.append((tag.name, text))
-    return content
+    try:
+        # Remove script and style tags
+        for script_or_style in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+            script_or_style.extract()
 
-def crawl_site(start_url, max_pages=50):
+        # Enhanced: Extract from more content types
+        content_selectors = [
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+            'p', 
+            'div[class*="content"]', 'div[class*="description"]', 'div[class*="text"]',
+            'span[class*="content"]', 'span[class*="description"]', 'span[class*="text"]',
+            'li[class*="feature"]', 'li[class*="spec"]', 'li[class*="detail"]',
+            'td', 'th',
+            '[class*="spec"]', '[class*="feature"]', '[class*="detail"]',
+            '[id*="content"]', '[id*="description"]', '[id*="text"]'
+        ]
+        
+        # Extract from specific selectors
+        for selector in content_selectors:
+            elements = soup.select(selector)
+            for element in elements:
+                text = element.get_text(strip=True)
+                if text and len(text) > 10:  # Filter out very short text
+                    # Determine appropriate tag name
+                    tag_name = element.name or 'content'
+                    if element.get('class'):
+                        tag_name = f"{tag_name}_{'_'.join(element.get('class', []))}"
+                    content.append((tag_name, text))
+
+        # Also extract from meta descriptions
+        meta_desc = soup.find('meta', attrs={'name': 'description'})
+        if meta_desc and meta_desc.get('content'):
+            content.append(('meta_description', meta_desc['content']))
+        
+        # Extract from title
+        if soup.title and soup.title.string:
+            content.append(('title', soup.title.string.strip()))
+
+        # Extract from alt text of images
+        for img in soup.find_all('img', alt=True):
+            if img.get('alt') and len(img['alt']) > 10:
+                content.append(('image_alt', img['alt']))
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_content = []
+        for tag, text in content:
+            if text not in seen:
+                seen.add(text)
+                unique_content.append((tag, text))
+
+        full_text = "\n".join([text for _, text in unique_content])
+        if not full_text.strip() and len(str(soup)) > 500:
+            logger.warning(f"Low text content extracted from {url} (possibly JS-heavy)")
+            
+        return unique_content
+        
+    except Exception as e:
+        logger.error(f"Error extracting content from {url}: {e}")
+        return []
+                    
+def crawl_site(start_url):
     global scraped_data
     scraped_data = []
     visited = set()
-    to_visit = [start_url]
+    to_visit = [(start_url, 0)]  # tuple of (url, depth)
     base_netloc = urlparse(start_url).netloc
 
+    # Bypass robots.txt completely by not using robot_parser
     driver = create_driver()
 
-    while to_visit and len(visited) < max_pages:
-        url = to_visit.pop(0)
+    while to_visit:
+        url, depth = to_visit.pop(0)
         if url in visited:
             continue
+        if depth > MAX_CRAWL_DEPTH:
+            logger.info(f"Skipping {url} due to max crawl depth {MAX_CRAWL_DEPTH}")
+            continue
+
+        # Removed robots.txt check to bypass restrictions
+
         try:
             driver.get(url)
-            time.sleep(2)  # wait for dynamic content to load
+            time.sleep(REQUEST_DELAY)  # rate limiting delay
+            
+            # Enhanced: Wait for dynamic content
+            try:
+                # Wait for page to load
+                from selenium.webdriver.support.ui import WebDriverWait
+                WebDriverWait(driver, 15).until(
+                    lambda d: d.execute_script("return document.readyState") == "complete"
+                )
+                
+                # Scroll to load lazy content
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(3)
+                
+                # Scroll back to top
+                driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(1)
+                
+            except:
+                pass  # Continue if wait fails
+
             html = driver.page_source
+            if len(html.encode('utf-8')) > MAX_PAGE_SIZE:
+                logger.warning(f"Page size too large, skipping content extraction for {url}")
+                visited.add(url)
+                continue
+
             soup = BeautifulSoup(html, 'html.parser')
             page_name = get_page_name(soup)
-            content = extract_content(soup)
+            content = extract_content(soup, url)
             for tag_name, text in content:
                 scraped_data.append({
                     'URL': url,
@@ -73,17 +187,70 @@ def crawl_site(start_url, max_pages=50):
                     'Content': text,
                     'Word Count': len(text.split())
                 })
+            logger.info(f"Successfully crawled {url} (Depth: {depth})")
             visited.add(url)
+
+            # Enhanced: Find more types of links
+            new_links = []
+            
+            # Standard href links
             for link in soup.find_all('a', href=True):
                 href = link['href']
                 full_url = urljoin(url, href)
-                if is_valid_url(full_url, base_netloc) and full_url not in visited and full_url not in to_visit:
-                    to_visit.append(full_url)
-        except Exception as e:
-            print(f"Error crawling {url}: {e}")
-            visited.add(url)
-    driver.quit()
+                if is_valid_url(full_url, base_netloc) and full_url not in visited:
+                    new_links.append((full_url, depth + 1))
+            
+            # Button links with onclick
+            for button in soup.find_all(['button', 'div', 'span']):
+                onclick = button.get('onclick', '')
+                if onclick and 'location.href' in onclick:
+                    import re
+                    href_match = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', onclick)
+                    if href_match:
+                        href = href_match.group(1)
+                        full_url = urljoin(url, href)
+                        if is_valid_url(full_url, base_netloc) and full_url not in visited:
+                            new_links.append((full_url, depth + 1))
+            
+            # Data attributes that might contain URLs
+            for element in soup.find_all(attrs={'data-url': True}):
+                href = element.get('data-url')
+                full_url = urljoin(url, href)
+                if is_valid_url(full_url, base_netloc) and full_url not in visited:
+                    new_links.append((full_url, depth + 1))
+            
+            # Add new unique links
+            for new_url, new_depth in new_links:
+                if new_url not in visited and all(new_url != u for u, _ in to_visit):
+                    logger.info(f"Adding URL to crawl queue: {new_url} (Depth: {new_depth})")
+                    to_visit.append((new_url, new_depth))
 
+        except TimeoutException:
+            logger.error(f"Timeout loading page {url}")
+            visited.add(url)
+        except WebDriverException as e:
+            logger.error(f"WebDriver error at {url}: {e}")
+            # Attempt to recover from session errors by restarting driver
+            if "invalid session id" in str(e).lower() or "session deleted" in str(e).lower():
+                logger.info("Restarting WebDriver due to session error")
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                driver = create_driver()
+                # Re-queue the current URL to retry
+                to_visit.insert(0, (url, depth))
+            else:
+                visited.add(url)
+        except Exception as e:
+            logger.error(f"Error crawling {url}: {e}")
+            visited.add(url)
+
+    try:
+        driver.quit()
+    except Exception:
+        pass
+                    
 def find_common_data(data):
     content_map = defaultdict(set)
     for entry in data:
@@ -216,6 +383,10 @@ def view_data(request):
         grouped = {}
         url_headings = {}
         url_slugs = {}
+
+        # Filter out entries with empty or missing 'URL'
+        filtered_data = [entry for entry in filtered_data if entry.get('URL')]
+
         for entry in filtered_data:
             url = entry['URL']
             slug = slugify(url)
@@ -225,7 +396,7 @@ def view_data(request):
                 url_slugs[url] = slug
             grouped[url]['entries'].append(entry)
             grouped[url]['total_words'] += entry['WordCount']
-
+            
         # New grouping by language and type
         language_groups = {}
         type_groups = {}
@@ -291,6 +462,10 @@ def view_data(request):
         grouped = {}
         url_headings = {}
         url_slugs = {}
+
+        # Filter out entries with empty or missing 'URL'
+        converted_data = [entry for entry in converted_data if entry.get('URL')]
+
         for entry in converted_data:
             url = entry['URL']
             slug = slugify(url)
@@ -300,7 +475,7 @@ def view_data(request):
                 url_slugs[url] = slug
             grouped[url]['entries'].append(entry)
             grouped[url]['total_words'] += entry['WordCount']
-
+        
         # New grouping by language and type
         language_groups = {}
         type_groups = {}
