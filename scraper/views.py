@@ -31,7 +31,7 @@ REQUEST_DELAY = 0.25  # seconds
 PAGE_LOAD_TIMEOUT = 30  # seconds
 MAX_PAGE_SIZE = 10 * 1024 * 1024 # 10 MB
 
-def create_driver():
+def create_driver():    
     options = Options()
     options.headless = True
     options.add_argument("--disable-gpu")
@@ -369,8 +369,10 @@ def find_common_data(data):
     for entry in data:
         content_map[entry['Content']].add(entry['URL'])
     common_data = []
+    total_urls = set(entry['URL'] for entry in data)
     for content_text, urls in content_map.items():
-        if len(urls) > 1:
+        # Show only data common to all URLs (no exceptions)
+        if urls == total_urls:
             text = content_text.strip()
             # Improved word count: count characters for CJK, else split by whitespace
             if any('\u4e00' <= ch <= '\u9fff' for ch in text):

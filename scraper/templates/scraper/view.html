@@ -37,6 +37,8 @@ x`{% extends "scraper/base.html" %}
             box-shadow: 0 3px 8px rgba(0,0,0,0.1);
             border-radius: 6px;
             overflow: hidden;
+            table-layout: fixed;
+            word-wrap: break-word;
         }
 
         thead tr {
@@ -49,6 +51,8 @@ x`{% extends "scraper/base.html" %}
             border: 1px solid #ddd;
             padding: 12px 15px;
             vertical-align: top;
+            word-wrap: break-word;
+            white-space: normal !important;
         }
 
         th {
@@ -138,7 +142,7 @@ x`{% extends "scraper/base.html" %}
 
         /* Responsive tables with horizontal scroll */
         .table-responsive {
-            overflow-x: auto;
+            overflow-x: visible;
             -webkit-overflow-scrolling: touch;
             border-radius: 6px;
         }
@@ -207,9 +211,9 @@ x`{% extends "scraper/base.html" %}
                     <table>
                         <thead>
                             <tr>
-                                <th>Heading/Tag</th>
+                                <th style="width: 100px;"> Heading/Tag</th>
                                 <th>Content</th>
-                                <th style="width: 100px;">Word Count</th>
+                                <th style="width: 50px;">Word Count</th>
                             </tr>
                         </thead>
                         <tbody>
