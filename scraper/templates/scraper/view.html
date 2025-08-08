@@ -187,7 +187,7 @@
                                 <ul class="urls-list">
                                     {% for url in item.URLs %}
                                     <li class="tooltip">
-                                        <a href="{% url 'url_data' url|slugify %}">{{ url|truncatechars:50 }}</a>
+                                        <a href="{% url 'scraper:url_data' url|slugify %}">{{ url|truncatechars:50 }}</a>
                                         <span class="tooltiptext">{{ url }}</span>
                                     </li>
                                     {% endfor %}

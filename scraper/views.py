@@ -17,6 +17,7 @@ from django.utils.text import slugify
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -140,242 +141,6 @@ def extract_content(soup, url):
         logger.error(f"Error extracting content from {url}: {e}")
         return []
                     
-def crawl_site(start_url):
-    global scraped_data
-    scraped_data = []
-    visited = set()
-    to_visit = [(start_url, 0)]  # tuple of (url, depth)
-    base_netloc = urlparse(start_url).netloc
-
-    # Bypass robots.txt completely by not using robot_parser
-    driver = create_driver()
-
-    from selenium.webdriver.common.action_chains import ActionChains
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    import random
-
-    def safe_click(element):
-        try:
-            element.click()
-            time.sleep(2)
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to click element: {e}")
-            return False
-
-    def fill_and_submit_form(form):
-        try:
-            inputs = form.find_elements(By.TAG_NAME, 'input')
-            for input_element in inputs:
-                input_type = input_element.get_attribute('type')
-                if input_type in ['text', 'search']:
-                    input_element.clear()
-                    input_element.send_keys('Test')
-                elif input_type == 'email':
-                    input_element.clear()
-                    input_element.send_keys('test@example.com')
-                elif input_type == 'tel':
-                    input_element.clear()
-                    input_element.send_keys('1234567890')
-                elif input_type == 'number':
-                    input_element.clear()
-                    input_element.send_keys('123')
-                elif input_type == 'password':
-                    input_element.clear()
-                    input_element.send_keys('password')
-                elif input_type == 'url':
-                    input_element.clear()
-                    input_element.send_keys('http://example.com')
-                # Add more input types as needed
-
-            textareas = form.find_elements(By.TAG_NAME, 'textarea')
-            for textarea in textareas:
-                textarea.clear()
-                textarea.send_keys('Test message')
-
-            selects = form.find_elements(By.TAG_NAME, 'select')
-            for select in selects:
-                options = select.find_elements(By.TAG_NAME, 'option')
-                if options:
-                    options[0].click()
-
-            # Submit the form
-            form.submit()
-            time.sleep(3)
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to fill and submit form: {e}")
-            return False
-
-    while to_visit:
-        url, depth = to_visit.pop(0)
-        if url in visited:
-            continue
-        if depth > MAX_CRAWL_DEPTH:
-            logger.info(f"Skipping {url} due to max crawl depth {MAX_CRAWL_DEPTH}")
-            continue
-
-        try:
-            driver.get(url)
-            time.sleep(REQUEST_DELAY)  # rate limiting delay
-
-            # Enhanced: Wait for dynamic content
-            try:
-                WebDriverWait(driver, 15).until(
-                    lambda d: d.execute_script("return document.readyState") == "complete"
-                )
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(3)
-                driver.execute_script("window.scrollTo(0, 0);")
-                time.sleep(1)
-            except:
-                pass
-
-            # Interact with language dropdown menu if present
-            try:
-                # Attempt to find language dropdown by common selectors
-                lang_dropdown = None
-                possible_selectors = [
-                    "//a[contains(text(), 'Language')]",
-                    "//div[contains(@class, 'language')]",
-                    "//div[contains(@id, 'language')]",
-                    "//ul[contains(@class, 'language')]",
-                    "//nav[contains(@class, 'language')]",
-                    "//button[contains(text(), 'Language')]"
-                ]
-                for selector in possible_selectors:
-                    elements = driver.find_elements(By.XPATH, selector)
-                    if elements:
-                        lang_dropdown = elements[0]
-                        break
-                if lang_dropdown:
-                    ActionChains(driver).move_to_element(lang_dropdown).perform()
-                    time.sleep(2)
-                    # Extract links inside dropdown
-                    dropdown_links = lang_dropdown.find_elements(By.XPATH, ".//following-sibling::ul//a[@href]")
-                    for link in dropdown_links:
-                        href = link.get_attribute('href')
-                        if href and is_valid_url(href, base_netloc) and href not in visited:
-                            logger.info(f"Adding language dropdown URL: {href}")
-                            to_visit.append((href, depth + 1))
-            except Exception as e:
-                logger.warning(f"Language dropdown interaction failed: {e}")
-
-            html = driver.page_source
-            if len(html.encode('utf-8')) > MAX_PAGE_SIZE:
-                logger.warning(f"Page size too large, skipping content extraction for {url}")
-                visited.add(url)
-                continue
-
-            soup = BeautifulSoup(html, 'html.parser')
-            page_name = get_page_name(soup)
-            content = extract_content(soup, url)
-            for tag_name, text in content:
-                scraped_data.append({
-                    'URL': url,
-                    'Page Name': page_name,
-                    'Heading/Tag': tag_name,
-                    'Content': text,
-                    'Word Count': len(text.split())
-                })
-            logger.info(f"Successfully crawled {url} (Depth: {depth})")
-            visited.add(url)
-
-            # Interact with buttons
-            try:
-                buttons = driver.find_elements(By.TAG_NAME, 'button')
-                for button in buttons:
-                    try:
-                        button_text = button.text.strip()
-                        if button_text and button.is_displayed() and button.is_enabled():
-                            if safe_click(button):
-                                new_url = driver.current_url
-                                if is_valid_url(new_url, base_netloc) and new_url not in visited:
-                                    logger.info(f"Adding URL from button click: {new_url}")
-                                    to_visit.append((new_url, depth + 1))
-                                driver.back()
-                                time.sleep(2)
-                    except Exception as e:
-                        logger.warning(f"Error interacting with button: {e}")
-            except Exception as e:
-                logger.warning(f"Button interaction failed: {e}")
-
-            # Interact with forms
-            try:
-                forms = driver.find_elements(By.TAG_NAME, 'form')
-                for form in forms:
-                    if fill_and_submit_form(form):
-                        new_url = driver.current_url
-                        if is_valid_url(new_url, base_netloc) and new_url not in visited:
-                            logger.info(f"Adding URL from form submission: {new_url}")
-                            to_visit.append((new_url, depth + 1))
-                        driver.back()
-                        time.sleep(2)
-            except Exception as e:
-                logger.warning(f"Form interaction failed: {e}")
-
-            # Enhanced: Find more types of links
-            new_links = []
-
-            # Standard href links
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                full_url = urljoin(url, href)
-                if is_valid_url(full_url, base_netloc) and full_url not in visited:
-                    new_links.append((full_url, depth + 1))
-
-            # Button links with onclick
-            for button in soup.find_all(['button', 'div', 'span']):
-                onclick = button.get('onclick', '')
-                if onclick and 'location.href' in onclick:
-                    import re
-                    href_match = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', onclick)
-                    if href_match:
-                        href = href_match.group(1)
-                        full_url = urljoin(url, href)
-                        if is_valid_url(full_url, base_netloc) and full_url not in visited:
-                            new_links.append((full_url, depth + 1))
-
-            # Data attributes that might contain URLs
-            for element in soup.find_all(attrs={'data-url': True}):
-                href = element.get('data-url')
-                full_url = urljoin(url, href)
-                if is_valid_url(full_url, base_netloc) and full_url not in visited:
-                    new_links.append((full_url, depth + 1))
-
-            # Add new unique links
-            for new_url, new_depth in new_links:
-                if new_url not in visited and all(new_url != u for u, _ in to_visit):
-                    logger.info(f"Adding URL to crawl queue: {new_url} (Depth: {new_depth})")
-                    to_visit.append((new_url, new_depth))
-
-        except TimeoutException:
-            logger.error(f"Timeout loading page {url}")
-            visited.add(url)
-        except WebDriverException as e:
-            logger.error(f"WebDriver error at {url}: {e}")
-            # Attempt to recover from session errors by restarting driver
-            if "invalid session id" in str(e).lower() or "session deleted" in str(e).lower():
-                logger.info("Restarting WebDriver due to session error")
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
-                driver = create_driver()
-                # Re-queue the current URL to retry
-                to_visit.insert(0, (url, depth))
-            else:
-                visited.add(url)
-        except Exception as e:
-            logger.error(f"Error crawling {url}: {e}")
-            visited.add(url)
-
-    try:
-        driver.quit()
-    except Exception:
-        pass
                     
 def find_common_data(data):
     content_map = defaultdict(set)
@@ -504,252 +269,389 @@ def index(request):
             return JsonResponse({'status': 'started'})
     return render(request, 'scraper/index.html')
 
-# Modified crawl_site to update progress
-def crawl_site(start_url):
+def discover_all_urls(start_url, driver):
+    """Comprehensive URL discovery system to find ALL pages on a website"""
+    base_netloc = urlparse(start_url).netloc
+    discovered_urls = set()
+    
+    logger.info(f"Starting comprehensive URL discovery for {start_url}")
+    
+    # 1. Check for sitemap.xml
+    try:
+        sitemap_urls = [
+            urljoin(start_url, '/sitemap.xml'),
+            urljoin(start_url, '/sitemap_index.xml'),
+            urljoin(start_url, '/sitemaps.xml'),
+            urljoin(start_url, '/sitemap/sitemap.xml')
+        ]
+        
+        for sitemap_url in sitemap_urls:
+            try:
+                driver.get(sitemap_url)
+                if "404" not in driver.title and "not found" not in driver.title.lower():
+                    soup = BeautifulSoup(driver.page_source, 'xml')
+                    # Extract URLs from sitemap
+                    for loc in soup.find_all('loc'):
+                        url = loc.text.strip()
+                        if is_valid_url(url, base_netloc):
+                            discovered_urls.add(url)
+                            logger.info(f"Found sitemap URL: {url}")
+                    break
+            except Exception as e:
+                logger.debug(f"Sitemap {sitemap_url} not accessible: {e}")
+                continue
+    except Exception as e:
+        logger.warning(f"Error checking sitemaps: {e}")
+    
+    # 2. Check robots.txt for sitemap references
+    try:
+        robots_url = urljoin(start_url, '/robots.txt')
+        driver.get(robots_url)
+        if "404" not in driver.title:
+            robots_content = driver.page_source
+            import re
+            sitemap_matches = re.findall(r'Sitemap:\s*(.+)', robots_content, re.IGNORECASE)
+            for sitemap_url in sitemap_matches:
+                sitemap_url = sitemap_url.strip()
+                try:
+                    driver.get(sitemap_url)
+                    soup = BeautifulSoup(driver.page_source, 'xml')
+                    for loc in soup.find_all('loc'):
+                        url = loc.text.strip()
+                        if is_valid_url(url, base_netloc):
+                            discovered_urls.add(url)
+                            logger.info(f"Found robots.txt sitemap URL: {url}")
+                except Exception as e:
+                    logger.debug(f"Error processing robots.txt sitemap {sitemap_url}: {e}")
+    except Exception as e:
+        logger.warning(f"Error checking robots.txt: {e}")
+    
+    logger.info(f"Discovered {len(discovered_urls)} URLs from sitemaps and robots.txt")
+    return discovered_urls
+
+def comprehensive_crawl_site(start_url):
+    """Comprehensive crawling system that finds and reads ALL pages"""
     global scraped_data, scrape_progress
     scraped_data = []
     visited = set()
-    to_visit = [(start_url, 0)]  # tuple of (url, depth)
+    visited_lock = threading.Lock()
+    data_lock = threading.Lock()
+    
+    # Increase limits for comprehensive crawling
+    max_workers = min(8, multiprocessing.cpu_count() * 2)  # Slightly reduced for stability
+    max_urls = 1000  # Increased limit for comprehensive crawling
+    max_depth = 15   # Increased depth
+    logger.info(f"Using {max_workers} threads for crawling")
+    logger.info(f"Starting comprehensive crawling with {max_workers} threads, max {max_urls} URLs, depth {max_depth}")
+    
     base_netloc = urlparse(start_url).netloc
-
+    url_queue = Queue()
+    
+    # Phase 1: Discover all URLs using sitemaps and systematic exploration
+    initial_driver = create_driver()
+    try:
+        discovered_urls = discover_all_urls(start_url, initial_driver)
+        
+        # Add discovered URLs to queue
+        for url in discovered_urls:
+            url_queue.put((url, 0))
+        
+        # Always add the start URL
+        url_queue.put((start_url, 0))
+        
+        logger.info(f"Added {len(discovered_urls) + 1} URLs to initial queue")
+        
+    finally:
+        initial_driver.quit()
+    
     scrape_progress['status'] = 'running'
-    scrape_progress['total_urls'] = 1
+    scrape_progress['total_urls'] = url_queue.qsize()
     scrape_progress['current_index'] = 0
     scrape_progress['current_url'] = start_url
 
-    # Bypass robots.txt completely by not using robot_parser
-    driver = create_driver()
-
-    from selenium.webdriver.common.action_chains import ActionChains
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    import random
-
-    def safe_click(element):
+    def comprehensive_process_url(url_data):
+        """Enhanced URL processing with comprehensive link discovery"""
+        url, depth = url_data
+        
+        with visited_lock:
+            if url in visited or depth > max_depth:
+                return []
+            visited.add(url)
+        
+        # Update progress with better tracking
+        with visited_lock:
+            current_processed = len(visited)
+            scrape_progress['current_index'] = current_processed
+            scrape_progress['current_url'] = url
+            # Update total as we discover more URLs
+            scrape_progress['total_urls'] = max(scrape_progress['total_urls'], current_processed + url_queue.qsize())
+        
+        driver = None
+        new_urls = []
+        
         try:
-            element.click()
-            time.sleep(2)
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to click element: {e}")
-            return False
-
-    def fill_and_submit_form(form):
-        try:
-            inputs = form.find_elements(By.TAG_NAME, 'input')
-            for input_element in inputs:
-                input_type = input_element.get_attribute('type')
-                if input_type in ['text', 'search']:
-                    input_element.clear()
-                    input_element.send_keys('Test')
-                elif input_type == 'email':
-                    input_element.clear()
-                    input_element.send_keys('test@example.com')
-                elif input_type == 'tel':
-                    input_element.clear()
-                    input_element.send_keys('1234567890')
-                elif input_type == 'number':
-                    input_element.clear()
-                    input_element.send_keys('123')
-                elif input_type == 'password':
-                    input_element.clear()
-                    input_element.send_keys('password')
-                elif input_type == 'url':
-                    input_element.clear()
-                    input_element.send_keys('http://example.com')
-                # Add more input types as needed
-
-            textareas = form.find_elements(By.TAG_NAME, 'textarea')
-            for textarea in textareas:
-                textarea.clear()
-                textarea.send_keys('Test message')
-
-            selects = form.find_elements(By.TAG_NAME, 'select')
-            for select in selects:
-                options = select.find_elements(By.TAG_NAME, 'option')
-                if options:
-                    options[0].click()
-
-            # Submit the form
-            form.submit()
-            time.sleep(3)
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to fill and submit form: {e}")
-            return False
-
-    while to_visit:
-        url, depth = to_visit.pop(0)
-        if url in visited:
-            continue
-        if depth > MAX_CRAWL_DEPTH:
-            logger.info(f"Skipping {url} due to max crawl depth {MAX_CRAWL_DEPTH}")
-            continue
-
-        scrape_progress['total_urls'] = len(to_visit) + len(visited) + 1
-        scrape_progress['current_index'] = len(visited) + 1
-        scrape_progress['current_url'] = url
-
-        try:
+            driver = create_driver()
+            driver.implicitly_wait(8)  # Slightly increased for comprehensive crawling
+            
+            logger.info(f"Comprehensively processing URL: {url} (Depth: {depth})")
             driver.get(url)
-            time.sleep(REQUEST_DELAY)  # rate limiting delay
-
-            # Enhanced: Wait for dynamic content
+            
+            # Enhanced page loading with multiple scroll attempts
             try:
                 WebDriverWait(driver, 15).until(
                     lambda d: d.execute_script("return document.readyState") == "complete"
                 )
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(3)
-                driver.execute_script("window.scrollTo(0, 0);")
-                time.sleep(1)
-            except:
-                pass
-
-            # Interact with language dropdown menu if present
-            try:
-                # Attempt to find language dropdown by common selectors
-                lang_dropdown = None
-                possible_selectors = [
-                    "//a[contains(text(), 'Language')]",
-                    "//div[contains(@class, 'language')]",
-                    "//div[contains(@id, 'language')]",
-                    "//ul[contains(@class, 'language')]",
-                    "//nav[contains(@class, 'language')]",
-                    "//button[contains(text(), 'Language')]"
-                ]
-                for selector in possible_selectors:
-                    elements = driver.find_elements(By.XPATH, selector)
-                    if elements:
-                        lang_dropdown = elements[0]
-                        break
-                if lang_dropdown:
-                    ActionChains(driver).move_to_element(lang_dropdown).perform()
+                
+                # Multiple scroll attempts to load all dynamic content
+                for i in range(3):
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                     time.sleep(2)
-                    # Extract links inside dropdown
-                    dropdown_links = lang_dropdown.find_elements(By.XPATH, ".//following-sibling::ul//a[@href]")
-                    for link in dropdown_links:
-                        href = link.get_attribute('href')
-                        if href and is_valid_url(href, base_netloc) and href not in visited:
-                            logger.info(f"Adding language dropdown URL: {href}")
-                            to_visit.append((href, depth + 1))
+                    driver.execute_script(f"window.scrollTo(0, {i * 500});")
+                    time.sleep(1)
+                
+                # Scroll back to top
+                driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(2)
+                
             except Exception as e:
-                logger.warning(f"Language dropdown interaction failed: {e}")
+                logger.warning(f"Page loading issues for {url}: {e}")
 
             html = driver.page_source
             if len(html.encode('utf-8')) > MAX_PAGE_SIZE:
-                logger.warning(f"Page size too large, skipping content extraction for {url}")
-                visited.add(url)
-                continue
+                logger.warning(f"Page size too large, skipping: {url}")
+                return []
 
             soup = BeautifulSoup(html, 'html.parser')
             page_name = get_page_name(soup)
             content = extract_content(soup, url)
-            for tag_name, text in content:
-                scraped_data.append({
-                    'URL': url,
-                    'Page Name': page_name,
-                    'Heading/Tag': tag_name,
-                    'Content': text,
-                    'Word Count': len(text.split())
-                })
-            logger.info(f"Successfully crawled {url} (Depth: {depth})")
-            visited.add(url)
-
-            # Interact with buttons
-            try:
-                buttons = driver.find_elements(By.TAG_NAME, 'button')
-                for button in buttons:
-                    try:
-                        button_text = button.text.strip()
-                        if button_text and button.is_displayed() and button.is_enabled():
-                            if safe_click(button):
-                                new_url = driver.current_url
-                                if is_valid_url(new_url, base_netloc) and new_url not in visited:
-                                    logger.info(f"Adding URL from button click: {new_url}")
-                                    to_visit.append((new_url, depth + 1))
-                                driver.back()
-                                time.sleep(2)
-                    except Exception as e:
-                        logger.warning(f"Error interacting with button: {e}")
-            except Exception as e:
-                logger.warning(f"Button interaction failed: {e}")
-
-            # Interact with forms
-            try:
-                forms = driver.find_elements(By.TAG_NAME, 'form')
-                for form in forms:
-                    if fill_and_submit_form(form):
-                        new_url = driver.current_url
-                        if is_valid_url(new_url, base_netloc) and new_url not in visited:
-                            logger.info(f"Adding URL from form submission: {new_url}")
-                            to_visit.append((new_url, depth + 1))
-                        driver.back()
-                        time.sleep(2)
-            except Exception as e:
-                logger.warning(f"Form interaction failed: {e}")
-
-            # Enhanced: Find more types of links
-            new_links = []
-
-            # Standard href links
+            
+            # Thread-safe data addition
+            with data_lock:
+                for tag_name, text in content:
+                    scraped_data.append({
+                        'URL': url,
+                        'Page Name': page_name,
+                        'Heading/Tag': tag_name,
+                        'Content': text,
+                        'Word Count': len(text.split())
+                    })
+            
+            # COMPREHENSIVE LINK DISCOVERY
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.common.action_chains import ActionChains
+            
+            # 1. Standard href links
             for link in soup.find_all('a', href=True):
                 href = link['href']
                 full_url = urljoin(url, href)
-                if is_valid_url(full_url, base_netloc) and full_url not in visited:
-                    new_links.append((full_url, depth + 1))
-
-            # Button links with onclick
-            for button in soup.find_all(['button', 'div', 'span']):
-                onclick = button.get('onclick', '')
-                if onclick and 'location.href' in onclick:
-                    import re
-                    href_match = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', onclick)
+                if is_valid_url(full_url, base_netloc):
+                    with visited_lock:
+                        if full_url not in visited:
+                            new_urls.append((full_url, depth + 1))
+            
+            # 2. Navigation menu links (comprehensive)
+            nav_selectors = [
+                'nav a[href]', 'header a[href]', 'footer a[href]',
+                '.nav a[href]', '.navigation a[href]', '.menu a[href]',
+                '.navbar a[href]', '.header a[href]', '.footer a[href]',
+                '[class*="nav"] a[href]', '[class*="menu"] a[href]',
+                '[id*="nav"] a[href]', '[id*="menu"] a[href]'
+            ]
+            
+            for selector in nav_selectors:
+                for link in soup.select(selector):
+                    href = link.get('href')
+                    if href:
+                        full_url = urljoin(url, href)
+                        if is_valid_url(full_url, base_netloc):
+                            with visited_lock:
+                                if full_url not in visited:
+                                    new_urls.append((full_url, depth + 1))
+            
+            # 3. Language and region links (enhanced)
+            try:
+                # Look for language dropdowns and click them
+                language_triggers = driver.find_elements(By.XPATH, 
+                    "//a[contains(text(), 'Language')] | //button[contains(text(), 'Language')] | "
+                    "//div[contains(@class, 'language')] | //div[contains(@class, 'lang')] | "
+                    "//select[contains(@class, 'language')] | //select[contains(@class, 'lang')]"
+                )
+                
+                for trigger in language_triggers:
+                    try:
+                        ActionChains(driver).move_to_element(trigger).perform()
+                        time.sleep(2)
+                        trigger.click()
+                        time.sleep(3)
+                        
+                        # Find all links that appeared
+                        lang_links = driver.find_elements(By.XPATH, "//a[@href]")
+                        for link in lang_links:
+                            try:
+                                href = link.get_attribute('href')
+                                if href and is_valid_url(href, base_netloc):
+                                    with visited_lock:
+                                        if href not in visited:
+                                            new_urls.append((href, depth + 1))
+                                            logger.info(f"Found language link: {href}")
+                            except Exception:
+                                continue
+                        break
+                    except Exception as e:
+                        logger.debug(f"Error with language trigger: {e}")
+                        continue
+                        
+            except Exception as e:
+                logger.warning(f"Language detection failed: {e}")
+            
+            # 4. Pagination links
+            pagination_selectors = [
+                '.pagination a[href]', '.pager a[href]', '.page-numbers a[href]',
+                '[class*="pagination"] a[href]', '[class*="pager"] a[href]',
+                'a[href*="page="]', 'a[href*="p="]', 'a[href*="offset="]'
+            ]
+            
+            for selector in pagination_selectors:
+                for link in soup.select(selector):
+                    href = link.get('href')
+                    if href:
+                        full_url = urljoin(url, href)
+                        if is_valid_url(full_url, base_netloc):
+                            with visited_lock:
+                                if full_url not in visited:
+                                    new_urls.append((full_url, depth + 1))
+            
+            # 5. Form actions and JavaScript links
+            for form in soup.find_all('form', action=True):
+                action = form.get('action')
+                if action:
+                    full_url = urljoin(url, action)
+                    if is_valid_url(full_url, base_netloc):
+                        with visited_lock:
+                            if full_url not in visited:
+                                new_urls.append((full_url, depth + 1))
+            
+            # 6. JavaScript onclick and data attributes
+            import re
+            for element in soup.find_all(['button', 'div', 'span', 'a']):
+                # onclick handlers
+                onclick = element.get('onclick', '')
+                if onclick and 'location' in onclick:
+                    href_match = re.search(r'["\']([^"\']+)["\']', onclick)
                     if href_match:
                         href = href_match.group(1)
                         full_url = urljoin(url, href)
-                        if is_valid_url(full_url, base_netloc) and full_url not in visited:
-                            new_links.append((full_url, depth + 1))
-
-            # Data attributes that might contain URLs
-            for element in soup.find_all(attrs={'data-url': True}):
-                href = element.get('data-url')
-                full_url = urljoin(url, href)
-                if is_valid_url(full_url, base_netloc) and full_url not in visited:
-                    new_links.append((full_url, depth + 1))
-
-            # Add new unique links
-            for new_url, new_depth in new_links:
-                if new_url not in visited and all(new_url != u for u, _ in to_visit):
-                    logger.info(f"Adding URL to crawl queue: {new_url} (Depth: {new_depth})")
-                    to_visit.append((new_url, new_depth))
-
+                        if is_valid_url(full_url, base_netloc):
+                            with visited_lock:
+                                if full_url not in visited:
+                                    new_urls.append((full_url, depth + 1))
+                
+                # data-href, data-url attributes
+                for attr in ['data-href', 'data-url', 'data-link']:
+                    data_url = element.get(attr)
+                    if data_url:
+                        full_url = urljoin(url, data_url)
+                        if is_valid_url(full_url, base_netloc):
+                            with visited_lock:
+                                if full_url not in visited:
+                                    new_urls.append((full_url, depth + 1))
+            
+            # 7. Try to interact with dropdowns and menus
+            try:
+                dropdowns = driver.find_elements(By.XPATH, 
+                    "//select | //div[contains(@class, 'dropdown')] | "
+                    "//ul[contains(@class, 'dropdown')] | //button[contains(@class, 'dropdown')]"
+                )
+                
+                for dropdown in dropdowns[:5]:  # Limit to first 5 to avoid infinite loops
+                    try:
+                        ActionChains(driver).move_to_element(dropdown).perform()
+                        time.sleep(1)
+                        dropdown.click()
+                        time.sleep(2)
+                        
+                        # Find new links that appeared
+                        dropdown_links = driver.find_elements(By.XPATH, "//a[@href]")
+                        for link in dropdown_links:
+                            try:
+                                href = link.get_attribute('href')
+                                if href and is_valid_url(href, base_netloc):
+                                    with visited_lock:
+                                        if href not in visited:
+                                            new_urls.append((href, depth + 1))
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+                        
+            except Exception as e:
+                logger.debug(f"Dropdown interaction failed: {e}")
+            
+            logger.info(f"Comprehensively processed {url}, found {len(new_urls)} new URLs")
+            return new_urls
+            
         except TimeoutException:
             logger.error(f"Timeout loading page {url}")
-            visited.add(url)
+            return []
         except WebDriverException as e:
             logger.error(f"WebDriver error at {url}: {e}")
-            # Attempt to recover from session errors by restarting driver
-            if "invalid session id" in str(e).lower() or "session deleted" in str(e).lower():
-                logger.info("Restarting WebDriver due to session error")
+            return []
+        except Exception as e:
+            logger.error(f"Error processing {url}: {e}")
+            return []
+        finally:
+            if driver:
                 try:
                     driver.quit()
-                except Exception:
+                except:
                     pass
-                driver = create_driver()
-                # Re-queue the current URL to retry
-                to_visit.insert(0, (url, depth))
-            else:
-                visited.add(url)
-        except Exception as e:
-            logger.error(f"Error crawling {url}: {e}")
-            visited.add(url)
 
-    try:
-        driver.quit()
-    except Exception:
-        pass
+    # Main comprehensive crawling loop
+    processed_count = 0
+    
+    while not url_queue.empty() and processed_count < max_urls:
+        # Get batch of URLs to process
+        current_batch = []
+        batch_size = min(max_workers, url_queue.qsize())
+        
+        for _ in range(batch_size):
+            if not url_queue.empty():
+                current_batch.append(url_queue.get())
+        
+        if not current_batch:
+            break
+        
+        # Update progress
+        scrape_progress['total_urls'] = processed_count + len(current_batch) + url_queue.qsize()
+        
+        # Process URLs in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_url = {executor.submit(comprehensive_process_url, url_data): url_data for url_data in current_batch}
+            
+            for future in as_completed(future_to_url):
+                url_data = future_to_url[future]
+                try:
+                    new_urls = future.result()
+                    processed_count += 1
+                    
+                    # Add new URLs to queue (with priority for shallow depths)
+                    new_urls.sort(key=lambda x: x[1])  # Sort by depth
+                    for new_url_data in new_urls:
+                        if processed_count + url_queue.qsize() < max_urls:
+                            url_queue.put(new_url_data)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing {url_data[0]}: {e}")
+                    processed_count += 1
+        
+        # Small delay between batches
+        time.sleep(0.2)
+    
+    logger.info(f"Comprehensive crawling completed. Processed {processed_count} URLs, collected {len(scraped_data)} content items")
+
+# Use the comprehensive crawler
+def crawl_site(start_url):
+    return comprehensive_crawl_site(start_url)
 
 def get_scrape_progress(request):
     global scrape_progress

@@ -63,7 +63,7 @@ document.getElementById('scrapeForm').addEventListener('submit', function(event)
 });
 
 function pollProgress() {
-    fetch("/scrape_progress/")
+    fetch("{% url 'scraper:scrape_progress' %}")
     .then(response => response.json())
     .then(data => {
         const progressBar = document.getElementById('progressBar');
@@ -76,14 +76,14 @@ function pollProgress() {
             progressBar.style.width = percent + '%';
 
             const currentFile = data.current_url || 'Loading...';
-            progressText.textContent = `Processing file ${current} of ${total}: ${currentFile}`;
+            progressText.textContent = `Processing URL ${current} of ${total}: ${currentFile}`;
 
             setTimeout(pollProgress, 500);
         } else if (data.status === 'completed') {
             progressBar.style.width = '100%';
             progressText.textContent = 'Scraping completed. Redirecting...';
             setTimeout(() => {
-                window.location.href = " {% url 'scraper:view_data' %} ";
+                window.location.href = "{% url 'scraper:view_data' %}";
             }, 1500);
         } else {
             progressText.textContent = 'Idle.';
