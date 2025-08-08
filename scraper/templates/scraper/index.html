@@ -19,10 +19,22 @@
 </div>
 
 <div id="progressContainer" style="display:none; margin-top: 20px;">
-    <div style="background-color: #e0e0e0; border-radius: 4px; height: 20px; width: 100%; overflow: hidden;">
-        <div id="progressBar" style="background-color: #007bff; height: 100%; width: 0%; transition: width 0.3s;"></div>
+    <div style="background-color: #e0e0e0; border-radius: 4px; height: 25px; width: 100%; overflow: hidden; border: 1px solid #ccc;">
+        <div id="progressBar" style="background-color: #28a745; height: 100%; width: 0%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;"></div>
     </div>
-    <p id="progressText" style="margin-top: 10px; font-weight: bold; color: #333;">Starting...</p>
+    <p id="progressText" style="margin-top: 15px; font-weight: bold; color: #333; font-size: 14px;">Starting...</p>
+    <div id="progressDetails" style="margin-top: 10px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; border: 1px solid #dee2e6;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+            <span><strong>Current Page:</strong> <span id="currentPage">0</span></span>
+            <span><strong>Total Pages:</strong> <span id="totalPages">0</span></span>
+        </div>
+        <div style="margin-bottom: 5px;">
+            <strong>Processing:</strong> <span id="currentUrl" style="font-family: monospace; font-size: 12px; color: #666;">Waiting...</span>
+        </div>
+        <div>
+            <strong>Status:</strong> <span id="statusText">Initializing...</span>
+        </div>
+    </div>
 </div>
 </div>
 
@@ -68,28 +80,51 @@ function pollProgress() {
     .then(data => {
         const progressBar = document.getElementById('progressBar');
         const progressText = document.getElementById('progressText');
+        const currentPage = document.getElementById('currentPage');
+        const totalPages = document.getElementById('totalPages');
+        const currentUrl = document.getElementById('currentUrl');
+        const statusText = document.getElementById('statusText');
 
         if (data.status === 'running') {
             const total = data.total_urls || 1;
             const current = data.current_index || 0;
             const percent = Math.min(100, Math.floor((current / total) * 100));
+            
+            // Update progress bar
             progressBar.style.width = percent + '%';
+            progressBar.textContent = percent + '%';
 
-            const currentFile = data.current_url || 'Loading...';
-            progressText.textContent = `Processing URL ${current} of ${total}: ${currentFile}`;
+            // Update current URL
+            const currentUrlText = data.current_url || 'Loading...';
+            const displayUrl = currentUrlText.length > 80 ? currentUrlText.substring(0, 80) + '...' : currentUrlText;
+            
+            // Update all progress elements
+            progressText.textContent = `Processing page ${current} of ${total}`;
+            currentPage.textContent = current;
+            totalPages.textContent = total;
+            currentUrl.textContent = displayUrl;
+            statusText.textContent = 'Crawling pages...';
 
             setTimeout(pollProgress, 500);
         } else if (data.status === 'completed') {
             progressBar.style.width = '100%';
+            progressBar.textContent = '100%';
             progressText.textContent = 'Scraping completed. Redirecting...';
+            statusText.textContent = 'Completed successfully!';
             setTimeout(() => {
                 window.location.href = "{% url 'scraper:view_data' %}";
             }, 1500);
+        } else if (data.status === 'started') {
+            progressText.textContent = 'Initializing scraper...';
+            statusText.textContent = 'Starting up...';
+            setTimeout(pollProgress, 500);
         } else {
             progressText.textContent = 'Idle.';
+            statusText.textContent = 'Waiting for input...';
         }
     }).catch(error => {
         console.error('Error fetching progress:', error);
+        document.getElementById('statusText').textContent = 'Connection error, retrying...';
         setTimeout(pollProgress, 2000);
     });
 }

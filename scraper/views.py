@@ -336,6 +336,7 @@ def comprehensive_crawl_site(start_url):
     visited = set()
     visited_lock = threading.Lock()
     data_lock = threading.Lock()
+    progress_lock = threading.Lock()  # Add progress lock
     
     # Increase limits for comprehensive crawling
     max_workers = min(8, multiprocessing.cpu_count() * 2)  # Slightly reduced for stability
@@ -364,10 +365,12 @@ def comprehensive_crawl_site(start_url):
     finally:
         initial_driver.quit()
     
-    scrape_progress['status'] = 'running'
-    scrape_progress['total_urls'] = url_queue.qsize()
-    scrape_progress['current_index'] = 0
-    scrape_progress['current_url'] = start_url
+    # Initialize progress tracking
+    with progress_lock:
+        scrape_progress['status'] = 'running'
+        scrape_progress['total_urls'] = url_queue.qsize()
+        scrape_progress['current_index'] = 0
+        scrape_progress['current_url'] = start_url
 
     def comprehensive_process_url(url_data):
         """Enhanced URL processing with comprehensive link discovery"""
@@ -379,7 +382,7 @@ def comprehensive_crawl_site(start_url):
             visited.add(url)
         
         # Update progress with better tracking
-        with visited_lock:
+        with progress_lock:
             current_processed = len(visited)
             scrape_progress['current_index'] = current_processed
             scrape_progress['current_url'] = url
