@@ -1,4 +1,4 @@
-x`{% extends "scraper/base.html" %}
+{% extends "scraper/base.html" %}
 
 {% block title %}Scraped Data{% endblock %}
 
@@ -310,6 +310,6 @@ x`{% extends "scraper/base.html" %}
             </div>
         {% endif %}
 
-        <a href="{% url 'index' %}" class="btn-back">Go back</a>
+        <a href="{% url 'scraper:index' %}" class="btn-back">Go back</a>
     </div>
 {% endblock %}

@@ -14,16 +14,84 @@
         </label>
         <input type="submit" value="Start Scraping" style="background-color: #007bff; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 4px; cursor: pointer; transition: background-color 0.3s ease;" onmouseover="this.style.backgroundColor='#0056b3'" onmouseout="this.style.backgroundColor='#007bff'" />
     </form>
-    <div id="loader" style="display:none; text-align:center; margin-top:20px;">
-        <p>Scraping in progress, please wait...</p>
+<div id="loader" style="display:none; text-align:center; margin-top:20px;">
+    <p>Scraping in progress, please wait...</p>
+</div>
+
+<div id="progressContainer" style="display:none; margin-top: 20px;">
+    <div style="background-color: #e0e0e0; border-radius: 4px; height: 20px; width: 100%; overflow: hidden;">
+        <div id="progressBar" style="background-color: #007bff; height: 100%; width: 0%; transition: width 0.3s;"></div>
     </div>
+    <p id="progressText" style="margin-top: 10px; font-weight: bold; color: #333;">Starting...</p>
+</div>
 </div>
 
 <script>
 document.getElementById('scrapeForm').addEventListener('submit', function(event) {
     event.preventDefault();
-    document.getElementById('loader').style.display = 'block';
-    this.submit();
+
+    const form = this;
+    const formData = new FormData(form);
+
+    // Hide form and show progress container
+    form.style.display = 'none';
+    const progressContainer = document.getElementById('progressContainer');
+    progressContainer.style.display = 'block';
+
+    // Start scraping by sending POST request via fetch
+    fetch("", {
+        method: "POST",
+        headers: {
+            'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
+        },
+        body: formData
+    }).then(response => response.json())
+    .then(data => {
+        if (data.status === 'started') {
+            // Start polling progress
+            pollProgress();
+        } else {
+            alert('Failed to start scraping.');
+            form.style.display = 'flex';
+            progressContainer.style.display = 'none';
+        }
+    }).catch(error => {
+        alert('Error starting scraping.');
+        form.style.display = 'flex';
+        progressContainer.style.display = 'none';
+    });
 });
+
+function pollProgress() {
+    fetch("/scrape_progress/")
+    .then(response => response.json())
+    .then(data => {
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+
+        if (data.status === 'running') {
+            const total = data.total_urls || 1;
+            const current = data.current_index || 0;
+            const percent = Math.min(100, Math.floor((current / total) * 100));
+            progressBar.style.width = percent + '%';
+
+            const currentFile = data.current_url || 'Loading...';
+            progressText.textContent = `Processing file ${current} of ${total}: ${currentFile}`;
+
+            setTimeout(pollProgress, 500);
+        } else if (data.status === 'completed') {
+            progressBar.style.width = '100%';
+            progressText.textContent = 'Scraping completed. Redirecting...';
+            setTimeout(() => {
+                window.location.href = " {% url 'scraper:view_data' %} ";
+            }, 1500);
+        } else {
+            progressText.textContent = 'Idle.';
+        }
+    }).catch(error => {
+        console.error('Error fetching progress:', error);
+        setTimeout(pollProgress, 2000);
+    });
+}
 </script>
 {% endblock %}
