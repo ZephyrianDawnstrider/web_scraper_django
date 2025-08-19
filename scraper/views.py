@@ -39,10 +39,10 @@ scrape_progress = {
     'current_url': ''
 }
 
-USER_AGENT = "YourTranslationCrawler/1.0 (info@yourcompany.com)"
-MAX_CRAWL_DEPTH = 10
+USER_AGENT = "YourTranslationCrawler/1.0 "
+MAX_CRAWL_DEPTH = 20
 REQUEST_DELAY = 0.25  # seconds
-PAGE_LOAD_TIMEOUT = 30  # seconds
+PAGE_LOAD_TIMEOUT = 10  # seconds
 MAX_PAGE_SIZE = 10 * 1024 * 1024 # 10 MB
 
 def create_driver():    
@@ -169,6 +169,15 @@ def filter_data_exclude_common(data, common_data):
     filtered = [entry for entry in data if entry['Content'] not in common_contents]
     return filtered
 
+import re
+
+def clean_sheet_name(name: str) -> str:
+    # Remove invalid Excel characters
+    name = re.sub(r'[\[\]\:\*\?\/\\]', '_', name)
+    
+    # Excel sheet names max length = 31 chars
+    return name[:31]
+
 def save_to_excel(filename='scraped_data.xlsx'):
     global scraped_data, show_common_data
     filepath = os.path.join(settings.BASE_DIR, filename)
@@ -189,12 +198,17 @@ def save_to_excel(filename='scraped_data.xlsx'):
             for url, entries in grouped.items():
                 df = pd.DataFrame(entries)
                 total_words = df['Word Count'].sum()
-                sheet_name = url.replace('http://', '').replace('https://', '').replace('/', '_')[:31]
+
+                # ✅ Fix: define sheet_name from URL first, then clean it
+                raw_name = url.replace('http://', '').replace('https://', '').replace('/', '_')
+                sheet_name = clean_sheet_name(raw_name)
+                
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
                 worksheet = writer.sheets[sheet_name]
                 worksheet.write(len(df) + 1, 0, 'Total Words')
                 worksheet.write(len(df) + 1, 4, total_words)
                 summary.append({'URL': url, 'Total Words': total_words})
+
 
             # Write common data sheet
             df_common = pd.DataFrame(common_data)
