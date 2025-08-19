@@ -9,6 +9,7 @@ from urllib.robotparser import RobotFileParser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 import multiprocessing
+import random, time
 
 from django.shortcuts import render, redirect
 from django.http import HttpResponse, FileResponse, JsonResponse
@@ -40,9 +41,9 @@ scrape_progress = {
 }
 
 USER_AGENT = "YourTranslationCrawler/1.0 "
-MAX_CRAWL_DEPTH = 20
-REQUEST_DELAY = 0.25  # seconds
-PAGE_LOAD_TIMEOUT = 10  # seconds
+MAX_CRAWL_DEPTH = 10
+REQUEST_DELAY = time.sleep(random.uniform(0.5, 1.2))  # seconds
+PAGE_LOAD_TIMEOUT = 18  # seconds
 MAX_PAGE_SIZE = 10 * 1024 * 1024 # 10 MB
 
 def create_driver():    
