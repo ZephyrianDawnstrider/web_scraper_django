@@ -179,6 +179,20 @@ def clean_sheet_name(name: str) -> str:
     # Excel sheet names max length = 31 chars
     return name[:31]
 
+def get_unique_sheet_name(base_name, existing_names):
+    name = clean_sheet_name(base_name)
+    original_name = name
+    counter = 1
+    # Ensure uniqueness
+    while name.lower() in (n.lower() for n in existing_names):
+        suffix = f"_{counter}"
+        # Keep within Excel’s 31-char limit
+        name = (original_name[:31 - len(suffix)]) + suffix
+        counter += 1
+    existing_names.add(name)
+    return name
+
+
 def save_to_excel(filename='scraped_data.xlsx'):
     global scraped_data, show_common_data
     filepath = os.path.join(settings.BASE_DIR, filename)
@@ -196,26 +210,27 @@ def save_to_excel(filename='scraped_data.xlsx'):
 
         with pd.ExcelWriter(filepath) as writer:
             summary = []
+            existing_names = set()
+            # 1. Create placeholder Summary first
+            pd.DataFrame(columns=['URL', 'Total Words']).to_excel(writer, sheet_name='Summary', index=False)
+
+            # 2. Write grouped URL sheets with unique names
             for url, entries in grouped.items():
                 df = pd.DataFrame(entries)
                 total_words = df['Word Count'].sum()
-
-                # ✅ Fix: define sheet_name from URL first, then clean it
                 raw_name = url.replace('http://', '').replace('https://', '').replace('/', '_')
-                sheet_name = clean_sheet_name(raw_name)
-                
+                sheet_name = get_unique_sheet_name(raw_name, existing_names)
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
                 worksheet = writer.sheets[sheet_name]
                 worksheet.write(len(df) + 1, 0, 'Total Words')
                 worksheet.write(len(df) + 1, 4, total_words)
                 summary.append({'URL': url, 'Total Words': total_words})
 
-
-            # Write common data sheet
+            # 3. Write common data sheet
             df_common = pd.DataFrame(common_data)
             df_common.to_excel(writer, sheet_name='Common Data', index=False)
 
-            # Write summary sheet
+            # 4. Overwrite Summary with final data
             df_summary = pd.DataFrame(summary)
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
     else:
@@ -229,23 +244,28 @@ def save_to_excel(filename='scraped_data.xlsx'):
 
         with pd.ExcelWriter(filepath) as writer:
             summary = []
+
+            # 1. Create empty summary first
+            df_summary = pd.DataFrame(columns=['URL', 'Total Words'])
+            df_summary.to_excel(writer, sheet_name='Summary', index=False)
+
+            # 2. Write all URL sheets
             for url, entries in grouped.items():
                 df = pd.DataFrame(entries)
-                # Calculate total words for this URL
                 total_words = df['Word Count'].sum()
-                # Write data to sheet named by URL (sanitized)
-                sheet_name = url.replace('http://', '').replace('https://', '').replace('/', '_')[:31]
+                raw_name = url.replace('http://', '').replace('https://', '').replace('/', '_')
+                sheet_name = clean_sheet_name(raw_name)
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
-                # Write total words at bottom of sheet
+
                 worksheet = writer.sheets[sheet_name]
                 worksheet.write(len(df) + 1, 0, 'Total Words')
                 worksheet.write(len(df) + 1, 4, total_words)
-                # Add to summary
                 summary.append({'URL': url, 'Total Words': total_words})
 
-            # Write summary sheet
+            # 3. Overwrite summary with final data
             df_summary = pd.DataFrame(summary)
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
+
 
 from django.shortcuts import redirect
 
@@ -354,7 +374,7 @@ def comprehensive_crawl_site(start_url):
     progress_lock = threading.Lock()  # Add progress lock
     
     # Increase limits for comprehensive crawling
-    max_workers = min(8, multiprocessing.cpu_count() * 2)  # Slightly reduced for stability
+    max_workers = min(16, multiprocessing.cpu_count() * 2)  # Slightly reduced for stability
     max_urls = 1000  # Increased limit for comprehensive crawling
     max_depth = 15   # Increased depth
     logger.info(f"Using {max_workers} threads for crawling")
