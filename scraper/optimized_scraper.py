@@ -107,39 +107,62 @@ class OptimizedWebScraper:
         )
     
     def _create_optimized_driver(self) -> webdriver.Chrome:
-        """Create optimized Chrome WebDriver instance"""
+        """Create optimized Chrome WebDriver instance with enhanced timeout handling"""
         options = Options()
         
-        # Performance optimizations
+        # Critical timeout and performance optimizations
         options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
         options.add_argument('--disable-extensions')
-        options.add_argument('--disable-images')  # Disable image loading
-        options.add_argument('--disable-javascript')  # Optional: disable JS for static content
+        options.add_argument('--disable-images')
         options.add_argument('--disable-plugins')
         options.add_argument('--disable-background-timer-throttling')
         options.add_argument('--disable-backgrounding-occluded-windows')
         options.add_argument('--disable-renderer-backgrounding')
+        options.add_argument('--disable-web-security')
+        options.add_argument('--disable-features=VizDisplayCompositor')
         
-        # Memory optimizations
+        # Memory and resource optimizations
         options.add_argument('--memory-pressure-off')
-        options.add_argument('--max_old_space_size=512')
+        options.add_argument('--max_old_space_size=256')
+        options.add_argument('--disk-cache-size=1')
+        options.add_argument('--media-cache-size=1')
         
-        # User agent
-        options.add_argument('--user-agent=Mozilla/5.0 (compatible; OptimizedScraper/1.0)')
+        # Network optimizations
+        options.add_argument('--disable-application-cache')
+        options.add_argument('--disable-browser-side-navigation')
+        options.add_argument('--disable-default-apps')
+        options.add_argument('--disable-extensions-file-access-check')
+        options.add_argument('--disable-extensions-http-throttling')
+        
+        # User agent rotation
+        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
         # Use webdriver-manager for automatic driver management
         service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
         
-        # Set timeouts
-        driver.set_page_load_timeout(15)
-        driver.implicitly_wait(3)
+        # Enhanced timeout configuration
+        from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+        
+        caps = DesiredCapabilities.CHROME.copy()
+        caps['pageLoadStrategy'] = 'eager'  # Don't wait for all resources
+        caps['goog:loggingPrefs'] = {'performance': 'ALL'}
+        
+        driver = webdriver.Chrome(
+            service=service, 
+            options=options,
+            desired_capabilities=caps
+        )
+        
+        # Aggressive timeout settings
+        driver.set_page_load_timeout(10)  # Reduced from 15
+        driver.set_script_timeout(5)
+        driver.implicitly_wait(2)  # Reduced from 3
         
         return driver
-    
+        
     async def _scrape_single_url(self, url: str, session: aiohttp.ClientSession) -> Dict:
         """Scrape a single URL with optimizations"""
         start_time = time.time()

@@ -374,11 +374,10 @@ def comprehensive_crawl_site(start_url):
     progress_lock = threading.Lock()  # Add progress lock
     
     # Increase limits for comprehensive crawling
-    max_workers = min(16, multiprocessing.cpu_count() * 2)  # Slightly reduced for stability
-    max_urls = 1000  # Increased limit for comprehensive crawling
+    max_workers = min(32, multiprocessing.cpu_count() * 2)  # Slightly reduced for stability
     max_depth = 15   # Increased depth
     logger.info(f"Using {max_workers} threads for crawling")
-    logger.info(f"Starting comprehensive crawling with {max_workers} threads, max {max_urls} URLs, depth {max_depth}")
+    logger.info(f"Starting comprehensive crawling with {max_workers} threads, depth {max_depth}")
     
     base_netloc = urlparse(start_url).netloc
     url_queue = Queue()
@@ -647,7 +646,7 @@ def comprehensive_crawl_site(start_url):
     # Main comprehensive crawling loop
     processed_count = 0
     
-    while not url_queue.empty() and processed_count < max_urls:
+    while not url_queue.empty():
         # Get batch of URLs to process
         current_batch = []
         batch_size = min(max_workers, url_queue.qsize())
@@ -675,7 +674,7 @@ def comprehensive_crawl_site(start_url):
                     # Add new URLs to queue (with priority for shallow depths)
                     new_urls.sort(key=lambda x: x[1])  # Sort by depth
                     for new_url_data in new_urls:
-                        if processed_count + url_queue.qsize() < max_urls:
+                        if processed_count + url_queue.qsize():
                             url_queue.put(new_url_data)
                     
                 except Exception as e:
