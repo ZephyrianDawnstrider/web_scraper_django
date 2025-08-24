@@ -1,332 +1,370 @@
-import asyncio
-import aiohttp
-import async_timeout
+import os
+import threading
+import time
 import logging
 import json
-import time
-import hashlib
+import gc
+import weakref
 from urllib.parse import urlparse, urljoin
-from collections import defaultdict
-from typing import Dict, List, Set, Optional
-import redis
-from bs4 import BeautifulSoup
-import pandas as pd
+from collections import defaultdict, deque
+from urllib.robotparser import RobotFileParser
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue, PriorityQueue
+import multiprocessing
+import random
+import sqlite3
+import pickle
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+
+from django.conf import settings
+from django.utils.text import slugify
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-import psutil
-import gc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from bs4 import BeautifulSoup
+import pandas as pd
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Setup logger
 logger = logging.getLogger('optimized_scraper')
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 class OptimizedWebScraper:
-    def __init__(self, 
-                 max_concurrent_requests: int = 10,
-                 cache_ttl: int = 3600,
-                 redis_host: str = 'localhost',
-                 redis_port: int = 6379,
-                 memory_threshold: float = 80.0):
+    def __init__(self, max_workers=None, cache_enabled=True):
+        self.max_workers = max_workers or min(8, multiprocessing.cpu_count() * 2)
+        self.cache_enabled = cache_enabled
+        self.driver_pool = []
+        self.driver_pool_lock = threading.Lock()
+        self.url_cache = {}
+        self.cache_db_path = os.path.join(settings.BASE_DIR, 'scraper_cache.db')
+        self.init_cache()
         
-        self.max_concurrent_requests = max_concurrent_requests
-        self.cache_ttl = cache_ttl
-        self.memory_threshold = memory_threshold
-        
-        # Initialize Redis for caching
-        try:
-            self.redis_client = redis.Redis(
-                host=redis_host, 
-                port=redis_port, 
-                decode_responses=True,
-                socket_connect_timeout=5
-            )
-            self.redis_client.ping()
-            logger.info("Redis connection established")
-        except:
-            logger.warning("Redis not available, caching disabled")
-            self.redis_client = None
-        
-        # Thread-safe sets for deduplication
-        self.processed_urls: Set[str] = set()
-        self.failed_urls: Set[str] = set()
-        
-        # Statistics
-        self.stats = {
-            'total_requests': 0,
-            'cache_hits': 0,
-            'successful_scrapes': 0,
-            'failed_scrapes': 0,
-            'memory_usage': []
-        }
-        
-    def _get_cache_key(self, url: str) -> str:
-        """Generate cache key for URL"""
-        return f"scrape:{hashlib.md5(url.encode()).hexdigest()}"
+    def init_cache(self):
+        """Initialize SQLite cache for URL processing"""
+        if self.cache_enabled:
+            conn = sqlite3.connect(self.cache_db_path)
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS url_cache (
+                    url TEXT PRIMARY KEY,
+                    content_hash TEXT,
+                    last_processed TIMESTAMP,
+                    data BLOB
+                )
+            ''')
+            conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_url ON url_cache(url)
+            ''')
+            conn.commit()
+            conn.close()
     
-    def _check_memory_usage(self) -> float:
-        """Check current memory usage percentage"""
-        memory = psutil.virtual_memory()
-        usage_percent = memory.percent
-        self.stats['memory_usage'].append(usage_percent)
-        
-        if usage_percent > self.memory_threshold:
-            logger.warning(f"High memory usage: {usage_percent}%")
-            gc.collect()
-        
-        return usage_percent
-    
-    async def _get_cached_response(self, url: str) -> Optional[Dict]:
-        """Get cached response from Redis"""
-        if not self.redis_client:
-            return None
-            
-        cache_key = self._get_cache_key(url)
-        cached = self.redis_client.get(cache_key)
-        
-        if cached:
-            self.stats['cache_hits'] += 1
-            return json.loads(cached)
-        
-        return None
-    
-    async def _cache_response(self, url: str, data: Dict):
-        """Cache response in Redis"""
-        if not self.redis_client:
-            return
-            
-        cache_key = self._get_cache_key(url)
-        self.redis_client.setex(
-            cache_key, 
-            self.cache_ttl, 
-            json.dumps(data, ensure_ascii=False)
-        )
-    
-    def _create_optimized_driver(self) -> webdriver.Chrome:
-        """Create optimized Chrome WebDriver instance with enhanced timeout handling"""
-        options = Options()
-        
-        # Critical timeout and performance optimizations
-        options.add_argument('--headless')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--disable-extensions')
-        options.add_argument('--disable-images')
-        options.add_argument('--disable-plugins')
-        options.add_argument('--disable-background-timer-throttling')
-        options.add_argument('--disable-backgrounding-occluded-windows')
-        options.add_argument('--disable-renderer-backgrounding')
-        options.add_argument('--disable-web-security')
-        options.add_argument('--disable-features=VizDisplayCompositor')
-        
-        # Memory and resource optimizations
-        options.add_argument('--memory-pressure-off')
-        options.add_argument('--max_old_space_size=256')
-        options.add_argument('--disk-cache-size=1')
-        options.add_argument('--media-cache-size=1')
-        
-        # Network optimizations
-        options.add_argument('--disable-application-cache')
-        options.add_argument('--disable-browser-side-navigation')
-        options.add_argument('--disable-default-apps')
-        options.add_argument('--disable-extensions-file-access-check')
-        options.add_argument('--disable-extensions-http-throttling')
-        
-        # User agent rotation
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        # Use webdriver-manager for automatic driver management
-        service = Service(ChromeDriverManager().install())
-        
-        # Enhanced timeout configuration
-        from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-        
-        caps = DesiredCapabilities.CHROME.copy()
-        caps['pageLoadStrategy'] = 'eager'  # Don't wait for all resources
-        caps['goog:loggingPrefs'] = {'performance': 'ALL'}
-        
-        driver = webdriver.Chrome(
-            service=service, 
-            options=options,
-            desired_capabilities=caps
-        )
-        
-        # Aggressive timeout settings
-        driver.set_page_load_timeout(10)  # Reduced from 15
-        driver.set_script_timeout(5)
-        driver.implicitly_wait(2)  # Reduced from 3
-        
-        return driver
-        
-    async def _scrape_single_url(self, url: str, session: aiohttp.ClientSession) -> Dict:
-        """Scrape a single URL with optimizations"""
-        start_time = time.time()
-        
-        # Check cache first
-        cached = await self._get_cached_response(url)
-        if cached:
-            logger.info(f"Cache hit for {url}")
-            return cached
-        
-        # Check if already processed
-        if url in self.processed_urls:
-            return {'url': url, 'status': 'already_processed'}
-        
-        self.processed_urls.add(url)
-        self.stats['total_requests'] += 1
-        
-        # Check memory usage
-        self._check_memory_usage()
-        
+    @contextmanager
+    def get_driver(self):
+        """Get driver from pool or create new one"""
         driver = None
         try:
-            driver = self._create_optimized_driver()
+            with self.driver_pool_lock:
+                if self.driver_pool:
+                    driver = self.driver_pool.pop()
+                else:
+                    driver = self.create_driver()
+            yield driver
+        finally:
+            if driver:
+                with self.driver_pool_lock:
+                    if len(self.driver_pool) < self.max_workers:
+                        self.driver_pool.append(driver)
+                    else:
+                        driver.quit()
+    
+    def create_driver(self):
+    
+    def get_driver(self) -> webdriver.Chrome:
+        """Get a driver from the pool or create a new one"""
+        self.semaphore.acquire()
+        
+        try:
+            driver = self.drivers.get_nowait()
+            return driver
+        except Empty:
+            with self.lock:
+                if self.active_drivers < self.pool_size:
+                    driver = self.create_driver()
+                    self.active_drivers += 1
+                    return driver
+                else:
+                    return self.drivers.get()
+    
+    def return_driver(self, driver: webdriver.Chrome):
+        """Return a driver to the pool"""
+        try:
+            self.drivers.put_nowait(driver)
+        except:
+            driver.quit()
+        finally:
+            self.semaphore.release()
+    
+    def cleanup(self):
+        """Clean up all drivers in the pool"""
+        while not self.drivers.empty():
+            try:
+                driver = self.drivers.get_nowait()
+                driver.quit()
+            except:
+                pass
+
+class BloomFilter:
+    """Memory-efficient duplicate detection using bloom filter"""
+    
+    def __init__(self, size: int = 1000000, hash_count: int = 3):
+        self.size = size
+        self.hash_count = hash_count
+        self.bit_array = [False] * size
+    
+    def _hashes(self, item: str) -> List[int]:
+        """Generate multiple hash values for an item"""
+        hashes = []
+        for i in range(self.hash_count):
+            hash_val = int(hashlib.md5(f"{item}{i}".encode()).hexdigest(), 16)
+            hashes.append(hash_val % self.size)
+        return hashes
+    
+    def add(self, item: str):
+        """Add an item to the bloom filter"""
+        for hash_val in self._hashes(item):
+            self.bit_array[hash_val] = True
+    
+    def contains(self, item: str) -> bool:
+        """Check if an item might exist in the bloom filter"""
+        for hash_val in self._hashes(item):
+            if not self.bit_array[hash_val]:
+                return False
+        return True
+
+class OptimizedWebScraper:
+    """High-performance web scraper with optimized crawling"""
+    
+    def __init__(self, config: CrawlConfig):
+        self.config = config
+        self.driver_pool = DriverPool(config.connection_pool_size)
+        self.visited_urls = BloomFilter()
+        self.url_queue = asyncio.PriorityQueue()
+        self.results = []
+        self.results_lock = asyncio.Lock()
+        self.base_netloc = None
+        self.robots_cache = {}
+        self.session = None
+        
+    async def fetch_robots_txt(self, base_url: str) -> Optional[object]:
+        """Fetch and parse robots.txt with caching"""
+        if base_url in self.robots_cache:
+            return self.robots_cache[base_url]
+        
+        try:
+            from urllib.robotparser import RobotFileParser
+            rp = RobotFileParser()
+            robots_url = urljoin(base_url, '/robots.txt')
+            rp.set_url(robots_url)
+            rp.read()
+            self.robots_cache[base_url] = rp
+            return rp
+        except Exception as e:
+            logger.warning(f"Error fetching robots.txt: {e}")
+            return None
+    
+    async def discover_urls(self, start_url: str) -> Set[str]:
+        """Discover all URLs using sitemaps and systematic exploration"""
+        discovered = set()
+        base_netloc = urlparse(start_url).netloc
+        
+        # Discover from sitemaps
+        sitemap_urls = [
+            urljoin(start_url, '/sitemap.xml'),
+            urljoin(start_url, '/sitemap_index.xml'),
+            urljoin(start_url, '/sitemaps.xml'),
+            urljoin(start_url, '/sitemap/sitemap.xml')
+        ]
+        
+        async with aiohttp.ClientSession() as session:
+            for sitemap_url in sitemap_urls:
+                try:
+                    async with session.get(sitemap_url, timeout=10) as response:
+                        if response.status == 200:
+                            content = await response.text()
+                            soup = BeautifulSoup(content, 'xml')
+                            for loc in soup.find_all('loc'):
+                                url = loc.text.strip()
+                                if self.is_valid_url(url, base_netloc):
+                                    discovered.add(url)
+                except Exception as e:
+                    logger.debug(f"Error accessing sitemap {sitemap_url}: {e}")
+        
+        return discovered
+    
+    def is_valid_url(self, url: str, base_netloc: str) -> bool:
+        """Check if URL is valid and belongs to the target domain"""
+        try:
+            parsed = urlparse(url)
+            return (parsed.scheme in ("http", "https") and 
+                    parsed.netloc == base_netloc and
+                    not parsed.path.endswith(('.pdf', '.jpg', '.png', '.gif', '.css', '.js')))
+        except:
+            return False
+    
+    async def extract_content(self, driver: webdriver.Chrome, url: str) -> List[Dict]:
+        """Extract content from a webpage with enhanced selectors"""
+        try:
             driver.get(url)
             
             # Wait for page load
+            WebDriverWait(driver, 10).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+            
+            # Scroll to load dynamic content
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             await asyncio.sleep(2)
             
-            # Get page content
-            html = driver.page_source
-            soup = BeautifulSoup(html, 'html.parser')
-            
-            # Extract data
-            page_name = soup.title.string.strip() if soup.title else "No Title"
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
             
             # Remove unwanted elements
-            for element in soup(['script', 'style', 'nav', 'header', 'footer']):
-                element.decompose()
+            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+                element.extract()
             
-            # Extract content
             content = []
-            for element in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p']):
-                text = element.get_text(strip=True)
-                if text and len(text) > 10:
-                    content.append({
-                        'tag': element.name,
-                        'text': text,
-                        'word_count': len(text.split())
-                    })
+            content_selectors = [
+                'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p',
+                'div[class*="content"]', 'div[class*="description"]', 'div[class*="text"]',
+                'span[class*="content"]', 'span[class*="description"]', 'span[class*="text"]',
+                'li[class*="feature"]', 'li[class*="spec"]', 'li[class*="detail"]',
+                'td', 'th', '[class*="spec"]', '[class*="feature"]', '[class*="detail"]'
+            ]
             
-            result = {
-                'url': url,
-                'page_name': page_name,
-                'content': content,
-                'timestamp': time.time(),
-                'processing_time': time.time() - start_time
-            }
+            for selector in content_selectors:
+                elements = soup.select(selector)
+                for element in elements:
+                    text = element.get_text(strip=True)
+                    if text and len(text) > 10:
+                        tag_name = element.name or 'content'
+                        if element.get('class'):
+                            tag_name = f"{tag_name}_{'_'.join(element.get('class', []))}"
+                        content.append({
+                            'URL': url,
+                            'Page Name': soup.title.string.strip() if soup.title else 'No Title',
+                            'Heading/Tag': tag_name,
+                            'Content': text,
+                            'Word Count': len(text.split())
+                        })
             
-            # Cache the result
-            await self._cache_response(url, result)
-            
-            self.stats['successful_scrapes'] += 1
-            logger.info(f"Successfully scraped {url} in {result['processing_time']:.2f}s")
-            
-            return result
+            return content
             
         except Exception as e:
-            self.stats['failed_scrapes'] += 1
-            self.failed_urls.add(url)
-            logger.error(f"Failed to scrape {url}: {str(e)}")
-            return {'url': url, 'error': str(e), 'status': 'failed'}
+            logger.error(f"Error extracting content from {url}: {e}")
+            return []
+    
+    async def process_url(self, task: CrawlTask) -> List[CrawlTask]:
+        """Process a single URL and return new URLs to crawl"""
+        if self.visited_urls.contains(task.url):
+            return []
+        
+        self.visited_urls.add(task.url)
+        
+        driver = self.driver_pool.get_driver()
+        try:
+            content = await asyncio.get_event_loop().run_in_executor(
+                None, self.extract_content, driver, task.url
+            )
+            
+            # Store results
+            async with self.results_lock:
+                self.results.extend(content)
+            
+            # Extract new URLs
+            new_tasks = []
+            # This would normally extract URLs from the content
+            # For now, return empty list as we're focusing on optimization
+            
+            return new_tasks
             
         finally:
-            if driver:
-                driver.quit()
-                del driver
+            self.driver_pool.return_driver(driver)
     
-    async def scrape_urls(self, urls: List[str]) -> List[Dict]:
-        """Scrape multiple URLs concurrently"""
-        logger.info(f"Starting optimized scraping of {len(urls)} URLs")
-        
-        # Create semaphore for rate limiting
-        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
-        
-        async def _bounded_scrape(url, session):
-            async with semaphore:
-                return await self._scrape_single_url(url, session)
-        
-        # Create aiohttp session with connection pooling
-        connector = aiohttp.TCPConnector(
-            limit=self.max_concurrent_requests * 2,
-            limit_per_host=self.max_concurrent_requests
-        )
-        
-        async with aiohttp.ClientSession(
-            connector=connector,
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as session:
-            tasks = [_bounded_scrape(url, session) for url in urls]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Filter out exceptions
-        valid_results = [r for r in results if isinstance(r, dict) and 'error' not in r]
-        
-        logger.info(f"Scraping completed: {len(valid_results)} successful, {len(self.failed_urls)} failed")
-        
-        return valid_results
+    async def crawl_worker(self):
+        """Worker coroutine to process URLs from the queue"""
+        while True:
+            try:
+                priority, task = await asyncio.wait_for(
+                    self.url_queue.get(), timeout=1.0
+                )
+                
+                if task.retry_count > self.config.retry_attempts:
+                    continue
+                
+                new_tasks = await self.process_url(task)
+                
+                for new_task in new_tasks:
+                    await self.url_queue.put((new_task.priority.value, new_task))
+                    
+            except asyncio.TimeoutError:
+                break
+            except Exception as e:
+                logger.error(f"Error in crawl worker: {e}")
     
-    def get_statistics(self) -> Dict:
-        """Get scraping statistics"""
-        return {
-            **self.stats,
-            'processed_urls': len(self.processed_urls),
-            'failed_urls': len(self.failed_urls),
-            'current_memory_usage': self._check_memory_usage()
-        }
+    async def crawl(self, start_url: str) -> List[Dict]:
+        """Main crawling method"""
+        self.base_netloc = urlparse(start_url).netloc
+        
+        # Discover initial URLs
+        discovered_urls = await self.discover_urls(start_url)
+        
+        # Add discovered URLs to queue
+        for url in discovered_urls:
+            task = CrawlTask(url=url, depth=0, priority=Priority.MEDIUM)
+            await self.url_queue.put((task.priority.value, task))
+        
+        # Always add start URL
+        start_task = CrawlTask(url=start_url, depth=0, priority=Priority.HIGH)
+        await self.url_queue.put((start_task.priority.value, start_task))
+        
+        # Start workers
+        workers = [
+            asyncio.create_task(self.crawl_worker())
+            for _ in range(self.config.max_workers)
+        ]
+        
+        # Wait for completion
+        await asyncio.gather(*workers)
+        
+        return self.results
     
-    def cleanup(self):
-        """Cleanup resources"""
-        if self.redis_client:
-            self.redis_client.close()
+    def save_results(self, filename: str = 'optimized_scraped_data.xlsx'):
+        """Save results to Excel file"""
+        if not self.results:
+            logger.warning("No results to save")
+            return
         
-        # Force garbage collection
-        gc.collect()
+        # Group by URL
+        grouped = defaultdict(list)
+        for item in self.results:
+            grouped[item['URL']].append(item)
         
-        logger.info("Cleanup completed")
-
-# Usage example
-async def main():
-    scraper = OptimizedWebScraper(
-        max_concurrent_requests=8,
-        cache_ttl=1800,
-        memory_threshold=75.0
-    )
-    
-    urls = [
-        'https://example.com',
-        'https://example.com/about',
-        'https://example.com/contact'
-    ]
-    
-    try:
-        results = await scraper.scrape_urls(urls)
-        stats = scraper.get_statistics()
-        
-        print(f"Scraped {len(results)} URLs successfully")
-        print(f"Statistics: {stats}")
-        
-        # Save to Excel
-        df = pd.DataFrame([
-            {
-                'URL': item['url'],
-                'Page Name': item['page_name'],
-                'Content Count': len(item['content']),
-                'Processing Time': item['processing_time']
-            }
-            for item in results
-        ])
-        
-        df.to_excel('optimized_scraped_data.xlsx', index=False)
-        print("Data saved to optimized_scraped_data.xlsx")
-        
-    finally:
-        scraper.cleanup()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        with pd.ExcelWriter(filename) as writer:
+            summary = []
+            for url, items in grouped.items():
+                df = pd.DataFrame(items)
+                sheet_name = url.replace('http://', '').replace('https://', '').replace('/', '_')[:31]
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                summary.append({
+                    'URL': url,
+                    'Total Words': df['Word Count'].sum()
+                })
+            

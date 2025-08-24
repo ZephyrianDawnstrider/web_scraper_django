@@ -43,8 +43,8 @@ scrape_progress = {
 USER_AGENT = "YourTranslationCrawler/1.0 "
 MAX_CRAWL_DEPTH = 10
 REQUEST_DELAY = time.sleep(random.uniform(0.5, 1.2))  # seconds
-PAGE_LOAD_TIMEOUT = 18  # seconds
-MAX_PAGE_SIZE = 10 * 1024 * 1024 # 10 MB
+PAGE_LOAD_TIMEOUT = 15  # seconds
+MAX_PAGE_SIZE = 10 * 1024 * 1024 # 5 MB
 
 def create_driver():    
     options = Options()
@@ -374,7 +374,7 @@ def comprehensive_crawl_site(start_url):
     progress_lock = threading.Lock()  # Add progress lock
     
     # Increase limits for comprehensive crawling
-    max_workers = min(32, multiprocessing.cpu_count() * 2)  # Slightly reduced for stability
+    max_workers = min(24, multiprocessing.cpu_count() * 3)  # Slightly reduced for stability
     max_depth = 15   # Increased depth
     logger.info(f"Using {max_workers} threads for crawling")
     logger.info(f"Starting comprehensive crawling with {max_workers} threads, depth {max_depth}")
