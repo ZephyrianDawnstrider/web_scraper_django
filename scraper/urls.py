@@ -9,4 +9,6 @@ urlpatterns = [
     path('download/', views.download, name='download'),
     path('view/<slug:url_slug>/', views.url_data, name='url_data'),
     path('scrape_progress/', views.get_scrape_progress, name='scrape_progress'),
+    path('site_mapping/', views.site_mapping, name='site_mapping'),
+    path('web_scraping/', views.web_scraping, name='web_scraping'),
 ]

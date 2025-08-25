@@ -148,42 +148,10 @@
         <div class="logo">CHL Softech</div>
         <nav>
             <ul>
-                <li><a href=" {% url 'scraper:index' %} ">Home</a></li>
-                <li>
-                    <button type="button" class="collapsible">Scraped Data</button>
-                    <div class="content-collapsible">
-                        <button type="button" class="collapsible">Language</button>
-                        <div class="content-collapsible">
-                            {% for lang, urls in language_groups.items %}
-                                <div class="tooltip">
-                                    <a href="{% url 'scraper:view_data' %}" title="{{ lang }}">{{ lang }}</a>
-                                    <span class="tooltiptext">{{ lang }}</span>
-                                </div>
-                                <div class="content-collapsible">
-                                    {% for url in urls %}
-                                        <a href="{% url 'scraper:url_data' url|slugify %}" title="{{ url_headings|get_item:url }}">{{ url_headings|get_item:url }}</a>
-                                    {% endfor %}
-                                </div>
-                            {% endfor %}
-                        </div>
-                        <button type="button" class="collapsible">Type</button>
-                        <div class="content-collapsible">
-                            {% for type, urls in type_groups.items %}
-                                <div class="tooltip">
-                                    <a href="{% url 'scraper:view_data' %}" title="{{ type }}">{{ type }}</a>
-                                    <span class="tooltiptext">{{ type }}</span>
-                                </div>
-                                <div class="content-collapsible">
-                                    {% for url in urls %}
-                                        <a href="{% url 'scraper:url_data' url|slugify %}" title="{{ url_headings|get_item:url }}">{{ url_headings|get_item:url }}</a>
-                                    {% endfor %}
-                                </div>
-                            {% endfor %}
-                        </div>
-                        <a href="{% url 'scraper:view_data' %}">All</a>
-                    </div>
-                </li>
-                <li><a href="{% url 'scraper:download' %}">Download Excel</a></li>
+                <li><a href="{% url 'scraper:index' %}">Home</a></li>
+                <li><a href="{% url 'scraper:site_mapping' %}">Site Mapping</a></li>
+                <li><a href="{% url 'scraper:web_scraping' %}">Web Scraping</a></li>
+                <li><a href="{% url 'scraper:download' %}">Download</a></li>
             </ul>
         </nav>
     </div>

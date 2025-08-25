@@ -1,0 +1,88 @@
+{% extends "scraper/base.html" %}
+
+{% block title %}Web Scraping{% endblock %}
+
+{% block content %}
+<h1>Web Scraping</h1>
+
+<form method="post">
+    {% csrf_token %}
+    <input type="text" name="url" placeholder="Enter URL" required>
+    <button type="submit">Start Web Scraping</button>
+</form>
+
+<div id="progress">
+    <p>Status: <span id="status">idle</span></p>
+    <p>Total URLs: <span id="total_urls">0</span></p>
+    <p>Processed: <span id="current_index">0</span></p>
+    <p>Current URL: <span id="current_url"></span></p>
+</div>
+
+<h2>Scraped Data</h2>
+<table>
+    <thead>
+        <tr>
+            <th>URL</th>
+            <th>Page Name</th>
+            <th>Heading/Tag</th>
+            <th>Content</th>
+            <th>Word Count</th>
+        </tr>
+    </thead>
+    <tbody id="scraped_data_body">
+        {% for item in scraped_data %}
+        <tr>
+            <td>{{ item.URL }}</td>
+            <td>{{ item.PageName }}</td>
+            <td>{{ item.HeadingTag }}</td>
+            <td>{{ item.Content }}</td>
+            <td>{{ item.WordCount }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.querySelector('form');
+        const progress = document.getElementById('progress');
+        const statusEl = document.getElementById('status');
+        const totalUrlsEl = document.getElementById('total_urls');
+        const currentIndexEl = document.getElementById('current_index');
+        const currentUrlEl = document.getElementById('current_url');
+        const scrapedDataBody = document.getElementById('scraped_data_body');
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const formData = new FormData(form);
+            fetch(form.action, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            }).then(response => response.json()).then(data => {
+                if (data.status === 'started') {
+                    updateProgress();
+                }
+            });
+        });
+
+        function updateProgress() {
+            const interval = setInterval(() => {
+                fetch("{% url 'scraper:scrape_progress' %}").then(response => response.json()).then(data => {
+                    statusEl.textContent = data.status;
+                    totalUrlsEl.textContent = data.total_urls;
+                    currentIndexEl.textContent = data.current_index;
+                    currentUrlEl.textContent = data.current_url;
+
+                    if (data.status === 'completed') {
+                        clearInterval(interval);
+                        location.reload(); // Reload to show the scraped data
+                    }
+                });
+            }, 2000);
+        }
+    });
+</script>
+{% endblock %}

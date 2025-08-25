@@ -3,6 +3,7 @@ import threading
 import time
 import logging
 import json
+import csv
 from urllib.parse import urlparse, urljoin
 from collections import defaultdict
 from urllib.robotparser import RobotFileParser
@@ -15,6 +16,7 @@ from django.shortcuts import render, redirect
 from django.http import HttpResponse, FileResponse, JsonResponse
 from django.conf import settings
 from django.utils.text import slugify
+from django.contrib.auth.models import User
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -23,13 +25,15 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 from bs4 import BeautifulSoup
 import pandas as pd
 
+from .models import ScrapingProject, CrawlSession, EnhancedMainURL, ScrapedPage
+
 # Setup logger
 logger = logging.getLogger('scraper')
 if not logger.hasHandlers():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Global variables to store scraped data and common data flag
-scraped_data = []
+sitemap_data = []
 show_common_data = False
 
 # Progress tracking variables
@@ -96,7 +100,7 @@ def extract_content(soup, url):
             'td', 'th',
             '[class*="spec"]', '[class*="feature"]', '[class*="detail"]',
             '[id*="content"]', '[id*="description"]', '[id*="text"]'
-        ]
+        ] 
         
         # Extract from specific selectors
         for selector in content_selectors:
@@ -146,9 +150,9 @@ def extract_content(soup, url):
 def find_common_data(data):
     content_map = defaultdict(set)
     for entry in data:
-        content_map[entry['Content']].add(entry['URL'])
+        content_map[entry['content']].add(entry['url'])
     common_data = []
-    total_urls = set(entry['URL'] for entry in data)
+    total_urls = set(entry['url'] for entry in data)
     for content_text, urls in content_map.items():
         # Show only data common to all URLs (no exceptions)
         if urls == total_urls:
@@ -159,22 +163,22 @@ def find_common_data(data):
             else:
                 word_count = len(text.split())
             common_data.append({
-                'Content': content_text,
-                'URLs': list(urls),
-                'Word Count': word_count
+                'content': content_text,
+                'urls': list(urls),
+                'word_count': word_count
             })
     return common_data
 
 def filter_data_exclude_common(data, common_data):
-    common_contents = set(item['Content'] for item in common_data)
-    filtered = [entry for entry in data if entry['Content'] not in common_contents]
+    common_contents = set(item['content'] for item in common_data)
+    filtered = [entry for entry in data if entry['content'] not in common_contents]
     return filtered
 
 import re
 
 def clean_sheet_name(name: str) -> str:
     # Remove invalid Excel characters
-    name = re.sub(r'[\[\]\:\*\?\/\\]', '_', name)
+    name = re.sub(r'[[\]\:\*\?\/\\]', '_', name)
     
     # Excel sheet names max length = 31 chars
     return name[:31]
@@ -194,7 +198,7 @@ def get_unique_sheet_name(base_name, existing_names):
 
 
 def save_to_excel(filename='scraped_data.xlsx'):
-    global scraped_data, show_common_data
+    scraped_data = list(ScrapedPage.objects.all().values())
     filepath = os.path.join(settings.BASE_DIR, filename)
     if show_common_data:
         common_data = find_common_data(scraped_data)
@@ -203,7 +207,7 @@ def save_to_excel(filename='scraped_data.xlsx'):
         # Group filtered_data by URL
         grouped = {}
         for entry in filtered_data:
-            url = entry['URL']
+            url = entry['url']
             if url not in grouped:
                 grouped[url] = []
             grouped[url].append(entry)
@@ -212,22 +216,28 @@ def save_to_excel(filename='scraped_data.xlsx'):
             summary = []
             existing_names = set()
             # 1. Create placeholder Summary first
-            pd.DataFrame(columns=['URL', 'Total Words']).to_excel(writer, sheet_name='Summary', index=False)
+            pd.DataFrame(columns=['url', 'Total Words']).to_excel(writer, sheet_name='Summary', index=False)
 
             # 2. Write grouped URL sheets with unique names
             for url, entries in grouped.items():
                 df = pd.DataFrame(entries)
-                total_words = df['Word Count'].sum()
+                for col in df.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df[col]):
+                        df[col] = df[col].dt.tz_localize(None)
+                total_words = df['word_count'].sum()
                 raw_name = url.replace('http://', '').replace('https://', '').replace('/', '_')
                 sheet_name = get_unique_sheet_name(raw_name, existing_names)
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
                 worksheet = writer.sheets[sheet_name]
                 worksheet.write(len(df) + 1, 0, 'Total Words')
                 worksheet.write(len(df) + 1, 4, total_words)
-                summary.append({'URL': url, 'Total Words': total_words})
+                summary.append({'url': url, 'Total Words': total_words})
 
             # 3. Write common data sheet
             df_common = pd.DataFrame(common_data)
+            for col in df_common.columns:
+                if pd.api.types.is_datetime64_any_dtype(df_common[col]):
+                    df_common[col] = df_common[col].dt.tz_localize(None)
             df_common.to_excel(writer, sheet_name='Common Data', index=False)
 
             # 4. Overwrite Summary with final data
@@ -237,7 +247,7 @@ def save_to_excel(filename='scraped_data.xlsx'):
         # Group data by URL
         grouped = {}
         for entry in scraped_data:
-            url = entry['URL']
+            url = entry['url']
             if url not in grouped:
                 grouped[url] = []
             grouped[url].append(entry)
@@ -246,13 +256,16 @@ def save_to_excel(filename='scraped_data.xlsx'):
             summary = []
 
             # 1. Create empty summary first
-            df_summary = pd.DataFrame(columns=['URL', 'Total Words'])
+            df_summary = pd.DataFrame(columns=['url', 'Total Words'])
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
 
             # 2. Write all URL sheets
             for url, entries in grouped.items():
                 df = pd.DataFrame(entries)
-                total_words = df['Word Count'].sum()
+                for col in df.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df[col]):
+                        df[col] = df[col].dt.tz_localize(None)
+                total_words = df['word_count'].sum()
                 raw_name = url.replace('http://', '').replace('https://', '').replace('/', '_')
                 sheet_name = clean_sheet_name(raw_name)
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -260,7 +273,7 @@ def save_to_excel(filename='scraped_data.xlsx'):
                 worksheet = writer.sheets[sheet_name]
                 worksheet.write(len(df) + 1, 0, 'Total Words')
                 worksheet.write(len(df) + 1, 4, total_words)
-                summary.append({'URL': url, 'Total Words': total_words})
+                summary.append({'url': url, 'Total Words': total_words})
 
             # 3. Overwrite summary with final data
             df_summary = pd.DataFrame(summary)
@@ -364,13 +377,10 @@ def discover_all_urls(start_url, driver):
     logger.info(f"Discovered {len(discovered_urls)} URLs from sitemaps and robots.txt")
     return discovered_urls
 
-def comprehensive_crawl_site(start_url):
+def comprehensive_crawl_site(start_url, session, main_url):
     """Comprehensive crawling system that finds and reads ALL pages"""
-    global scraped_data, scrape_progress
-    scraped_data = []
     visited = set()
     visited_lock = threading.Lock()
-    data_lock = threading.Lock()
     progress_lock = threading.Lock()  # Add progress lock
     
     # Increase limits for comprehensive crawling
@@ -406,7 +416,7 @@ def comprehensive_crawl_site(start_url):
         scrape_progress['current_index'] = 0
         scrape_progress['current_url'] = start_url
 
-    def comprehensive_process_url(url_data):
+    def comprehensive_process_url(url_data, session, main_url):
         """Enhanced URL processing with comprehensive link discovery"""
         url, depth = url_data
         
@@ -462,16 +472,15 @@ def comprehensive_crawl_site(start_url):
             page_name = get_page_name(soup)
             content = extract_content(soup, url)
             
-            # Thread-safe data addition
-            with data_lock:
-                for tag_name, text in content:
-                    scraped_data.append({
-                        'URL': url,
-                        'Page Name': page_name,
-                        'Heading/Tag': tag_name,
-                        'Content': text,
-                        'Word Count': len(text.split())
-                    })
+            # Save to database
+            ScrapedPage.objects.create(
+                main_url=main_url,
+                session=session,
+                url=url,
+                title=page_name,
+                content="\n".join([text for _, text in content]),
+                word_count=len(" ".join([text for _, text in content]).split())
+            )
             
             # COMPREHENSIVE LINK DISCOVERY
             from selenium.webdriver.common.by import By
@@ -574,7 +583,7 @@ def comprehensive_crawl_site(start_url):
                 # onclick handlers
                 onclick = element.get('onclick', '')
                 if onclick and 'location' in onclick:
-                    href_match = re.search(r'["\']([^"\']+)["\']', onclick)
+                    href_match = re.search(r'["\\]([^"\\]+)["\\]', onclick)
                     if href_match:
                         href = href_match.group(1)
                         full_url = urljoin(url, href)
@@ -663,7 +672,7 @@ def comprehensive_crawl_site(start_url):
         
         # Process URLs in parallel
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_url = {executor.submit(comprehensive_process_url, url_data): url_data for url_data in current_batch}
+            future_to_url = {executor.submit(comprehensive_process_url, url_data, session, main_url): url_data for url_data in current_batch}
             
             for future in as_completed(future_to_url):
                 url_data = future_to_url[future]
@@ -684,11 +693,11 @@ def comprehensive_crawl_site(start_url):
         # Small delay between batches
         time.sleep(0.2)
     
-    logger.info(f"Comprehensive crawling completed. Processed {processed_count} URLs, collected {len(scraped_data)} content items")
+    logger.info(f"Comprehensive crawling completed. Processed {processed_count} URLs.")
 
 # Use the comprehensive crawler
-def crawl_site(start_url):
-    return comprehensive_crawl_site(start_url)
+def crawl_site(start_url, session, main_url):
+    return comprehensive_crawl_site(start_url, session, main_url)
 
 def get_scrape_progress(request):
     global scrape_progress
@@ -697,7 +706,7 @@ def get_scrape_progress(request):
 from django.utils.text import slugify
 
 def view_data(request):
-    global scraped_data, show_common_data
+    scraped_data = list(ScrapedPage.objects.all().values())
     if not scraped_data:
         return render(request, 'scraper/no_data.html')
     if show_common_data:
@@ -710,7 +719,7 @@ def view_data(request):
             for item in data_list:
                 new_item = {}
                 for k, v in item.items():
-                    new_key = k.replace(' ', '').replace('/', '')
+                    new_key = k.replace('_', '').lower()
                     new_item[new_key] = v
                 new_list.append(new_item)
             return new_list
@@ -723,18 +732,18 @@ def view_data(request):
         url_headings = {}
         url_slugs = {}
 
-        # Filter out entries with empty or missing 'URL'
-        filtered_data = [entry for entry in filtered_data if entry.get('URL')]
+        # Filter out entries with empty or missing 'url'
+        filtered_data = [entry for entry in filtered_data if entry.get('url')]
 
         for entry in filtered_data:
-            url = entry['URL']
+            url = entry['url']
             slug = slugify(url)
             if url not in grouped:
                 grouped[url] = {'entries': [], 'total_words': 0}
-                url_headings[url] = entry.get('PageName', url)
+                url_headings[url] = entry.get('title', url)
                 url_slugs[url] = slug
             grouped[url]['entries'].append(entry)
-            grouped[url]['total_words'] += entry['WordCount']
+            grouped[url]['total_words'] += entry['wordcount']
             
         # New grouping by language and type
         language_groups = {}
@@ -742,8 +751,8 @@ def view_data(request):
 
         for entry in filtered_data:
             # Example: determine language from URL or content (simplified)
-            url = entry['URL']
-            content = entry['Content']
+            url = entry['url']
+            content = entry['content']
             # Simple heuristic: check for Japanese characters
             if any('\u3040' <= ch <= '\u30ff' for ch in content):
                 lang = 'Japanese'
@@ -790,7 +799,7 @@ def view_data(request):
             for item in data_list:
                 new_item = {}
                 for k, v in item.items():
-                    new_key = k.replace(' ', '').replace('/', '')
+                    new_key = k.replace('_', '').lower()
                     new_item[new_key] = v
                 new_list.append(new_item)
             return new_list
@@ -802,26 +811,26 @@ def view_data(request):
         url_headings = {}
         url_slugs = {}
 
-        # Filter out entries with empty or missing 'URL'
-        converted_data = [entry for entry in converted_data if entry.get('URL')]
+        # Filter out entries with empty or missing 'url'
+        converted_data = [entry for entry in converted_data if entry.get('url')]
 
         for entry in converted_data:
-            url = entry['URL']
+            url = entry['url']
             slug = slugify(url)
             if url not in grouped:
                 grouped[url] = {'entries': [], 'total_words': 0}
-                url_headings[url] = entry.get('PageName', url)
+                url_headings[url] = entry.get('title', url)
                 url_slugs[url] = slug
             grouped[url]['entries'].append(entry)
-            grouped[url]['total_words'] += entry['WordCount']
+            grouped[url]['total_words'] += entry['wordcount']
         
         # New grouping by language and type
         language_groups = {}
         type_groups = {}
 
         for entry in converted_data:
-            url = entry['URL']
-            content = entry['Content']
+            url = entry['url']
+            content = entry['content']
             if any('\u3040' <= ch <= '\u30ff' for ch in content):
                 lang = 'Japanese'
             elif any('\u4e00' <= ch <= '\u9fff' for ch in content):
@@ -858,45 +867,87 @@ def view_data(request):
         }
         return render(request, 'scraper/view.html', context)
 
-def download(request):
-    filename = 'scraped_data.xlsx'
-    filepath = os.path.join(settings.BASE_DIR, filename)
-    if os.path.exists(filepath):
-        return FileResponse(open(filepath, 'rb'), as_attachment=True)
-    else:
-        return HttpResponse("File not found", status=404)
+import csv
 
-from django.utils.text import slugify
+def download(request):
+    page = request.session.get('page')
+    if page == 'sitemap':
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="sitemap.csv"'
+        writer = csv.writer(response)
+        writer.writerow(['URL'])
+        for url in sitemap_data:
+            writer.writerow([url])
+        return response
+    elif page == 'web_scraping':
+        filename = 'scraped_data.xlsx'
+        filepath = os.path.join(settings.BASE_DIR, filename)
+        if os.path.exists(filepath):
+            return FileResponse(open(filepath, 'rb'), as_attachment=True)
+        else:
+            return HttpResponse("File not found", status=404)
+    else:
+        return HttpResponse("No data to download", status=404)
+
+def site_mapping(request):
+    request.session['page'] = 'sitemap'
+    global scrape_progress, sitemap_data
+    if request.method == 'POST':
+        url = request.POST.get('url')
+        if url:
+            scrape_progress['status'] = 'started'
+            scrape_progress['total_urls'] = 0
+            scrape_progress['current_index'] = 0
+            scrape_progress['current_url'] = ''
+
+            def sitemap_and_save():
+                global sitemap_data
+                sitemap_data = []
+                driver = create_driver()
+                try:
+                    sitemap_data.extend(list(discover_all_urls(url, driver)))
+                finally:
+                    driver.quit()
+                # I will add saving the sitemap to a file here later
+                scrape_progress['status'] = 'completed'
+
+            thread = threading.Thread(target=sitemap_and_save)
+            thread.start()
+            return JsonResponse({'status': 'started'})
+    return render(request, 'scraper/site_mapping.html', {'sitemap_data': sitemap_data})
+
+def web_scraping(request):
+    request.session['page'] = 'web_scraping'
+    if request.method == 'POST':
+        url = request.POST.get('url')
+        if url:
+            # Create a project and session
+            # Assuming a default user with id=1 exists.
+            # In a real application, you would get the logged-in user.
+            user, _ = User.objects.get_or_create(id=1, defaults={'username': 'defaultuser'})
+            project, _ = ScrapingProject.objects.get_or_create(name='Default Project', defaults={'created_by': user})
+            session = CrawlSession.objects.create(project=project)
+            main_url, _ = EnhancedMainURL.objects.get_or_create(project=project, url=url)
+
+            scrape_progress['status'] = 'started'
+            scrape_progress['total_urls'] = 0
+            scrape_progress['current_index'] = 0
+            scrape_progress['current_url'] = ''
+
+            def scrape_and_save():
+                comprehensive_crawl_site(url, session, main_url)
+                save_to_excel() # I will keep this for now
+                session.status = 'completed'
+                session.save()
+                scrape_progress['status'] = 'completed'
+
+            thread = threading.Thread(target=scrape_and_save)
+            thread.start()
+            return JsonResponse({'status': 'started'})
+    scraped_data = list(ScrapedPage.objects.all().values())
+    return render(request, 'scraper/web_scraping.html', {'scraped_data': scraped_data})
 
 def url_data(request, url_slug):
-    global scraped_data
-    # Find original URL from slug
-    original_url = None
-    for entry in scraped_data:
-        if slugify(entry['URL']) == url_slug:
-            original_url = entry['URL']
-            break
-    if not original_url:
-        return render(request, 'scraper/no_data.html')
-
-    # Filter scraped_data for this URL
-    filtered_entries = [entry for entry in scraped_data if entry['URL'] == original_url]
-
-    # Convert keys to match template variable names without spaces
-    def convert_keys(data_list):
-        new_list = []
-        for item in data_list:
-            new_item = {}
-            for k, v in item.items():
-                new_key = k.replace(' ', '').replace('/', '')
-                new_item[new_key] = v
-            new_list.append(new_item)
-        return new_list
-
-    converted_entries = convert_keys(filtered_entries)
-
-    context = {
-        'url': original_url,
-        'entries': converted_entries,
-    }
-    return render(request, 'scraper/url_data.html', context)
+    # This is a placeholder function to avoid the AttributeError
+    # In a real application, you would implement the logic to display data for a specific URL
+    return HttpResponse(f"Data for URL slug: {url_slug}")

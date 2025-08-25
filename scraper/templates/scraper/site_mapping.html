@@ -1,0 +1,71 @@
+{% extends "scraper/base.html" %}
+
+{% block title %}Site Mapping{% endblock %}
+
+{% block content %}
+<h1>Site Mapping</h1>
+
+<form method="post">
+    {% csrf_token %}
+    <input type="text" name="url" placeholder="Enter URL" required>
+    <button type="submit">Start Site Mapping</button>
+</form>
+
+<div id="progress">
+    <p>Status: <span id="status">idle</span></p>
+    <p>Total URLs: <span id="total_urls">0</span></p>
+    <p>Processed: <span id="current_index">0</span></p>
+    <p>Current URL: <span id="current_url"></span></p>
+</div>
+
+<h2>Discovered URLs</h2>
+<ul id="sitemap_list">
+    {% for url in sitemap_data %}
+    <li>{{ url }}</li>
+    {% endfor %}
+</ul>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.querySelector('form');
+        const progress = document.getElementById('progress');
+        const statusEl = document.getElementById('status');
+        const totalUrlsEl = document.getElementById('total_urls');
+        const currentIndexEl = document.getElementById('current_index');
+        const currentUrlEl = document.getElementById('current_url');
+        const sitemapList = document.getElementById('sitemap_list');
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const formData = new FormData(form);
+            fetch(form.action, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            }).then(response => response.json()).then(data => {
+                if (data.status === 'started') {
+                    updateProgress();
+                }
+            });
+        });
+
+        function updateProgress() {
+            const interval = setInterval(() => {
+                fetch("{% url 'scraper:scrape_progress' %}").then(response => response.json()).then(data => {
+                    statusEl.textContent = data.status;
+                    totalUrlsEl.textContent = data.total_urls;
+                    currentIndexEl.textContent = data.current_index;
+                    currentUrlEl.textContent = data.current_url;
+
+                    if (data.status === 'completed') {
+                        clearInterval(interval);
+                        location.reload(); // Reload to show the sitemap
+                    }
+                });
+            }, 2000);
+        }
+    });
+</script>
+{% endblock %}
