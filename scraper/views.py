@@ -905,6 +905,15 @@ def site_mapping(request):
     if request.method == 'POST':
         url = request.POST.get('url')
         if url:
+            # Create a project and session
+            user, _ = User.objects.get_or_create(id=1, defaults={'username': 'defaultuser'})
+            project, _ = ScrapingProject.objects.get_or_create(name='Default Project', defaults={'created_by': user})
+            session = CrawlSession.objects.create(project=project)
+            main_url, _ = EnhancedMainURL.objects.get_or_create(project=project, url=url)
+
+            # Clear old data for this URL to ensure a fresh crawl
+            ScrapedPage.objects.filter(main_url=main_url).delete()
+
             scrape_progress['status'] = 'started'
             scrape_progress['total_urls'] = 0
             scrape_progress['current_index'] = 0
@@ -912,19 +921,18 @@ def site_mapping(request):
 
             def sitemap_and_save():
                 global sitemap_data
-                sitemap_data = []
-                driver = create_driver()
-                try:
-                    sitemap_data.extend(list(discover_all_urls(url, driver)))
-                finally:
-                    driver.quit()
-                # I will add saving the sitemap to a file here later
+                comprehensive_crawl_site(url, session, main_url)
+                sitemap_data = [page.url for page in ScrapedPage.objects.filter(main_url=main_url)]
+                session.status = 'completed'
+                session.save()
                 scrape_progress['status'] = 'completed'
 
             thread = threading.Thread(target=sitemap_and_save)
             thread.start()
             return JsonResponse({'status': 'started'})
-    return render(request, 'scraper/site_mapping.html', {'sitemap_data': sitemap_data})
+    
+    sitemap_data_count = len(sitemap_data)
+    return render(request, 'scraper/site_mapping.html', {'sitemap_data': sitemap_data, 'sitemap_data_count': sitemap_data_count})
 
 def web_scraping(request):
     request.session['page'] = 'web_scraping'
