@@ -61,6 +61,9 @@ def create_driver():
 
 def is_valid_url(url, base_netloc):
     try:
+        # Reject mailto links
+        if url.startswith('mailto:'):
+            return False
         parsed = urlparse(url)
         return (parsed.scheme in ("http", "https")) and (parsed.netloc == base_netloc)
     except:
@@ -422,6 +425,10 @@ def comprehensive_crawl_site(start_url, session, main_url):
         
         with visited_lock:
             if url in visited or depth > max_depth:
+                if url in visited:
+                    logger.info(f"Skipping already visited URL: {url}")
+                else:
+                    logger.info(f"Skipping URL due to max depth: {url}")
                 return []
             visited.add(url)
         
@@ -473,14 +480,16 @@ def comprehensive_crawl_site(start_url, session, main_url):
             content = extract_content(soup, url)
             
             # Save to database
-            ScrapedPage.objects.create(
-                main_url=main_url,
-                session=session,
-                url=url,
-                title=page_name,
-                content="\n".join([text for _, text in content]),
-                word_count=len(" ".join([text for _, text in content]).split())
-            )
+            # Check if the page already exists
+            if not ScrapedPage.objects.filter(main_url=main_url, url=url).exists():
+                ScrapedPage.objects.create(
+                    main_url=main_url,
+                    session=session,
+                    url=url,
+                    title=page_name,
+                    content="\n".join([text for _, text in content]),
+                    word_count=len(" ".join([text for _, text in content]).split())
+                )
             
             # COMPREHENSIVE LINK DISCOVERY
             from selenium.webdriver.common.by import By
@@ -649,7 +658,8 @@ def comprehensive_crawl_site(start_url, session, main_url):
             if driver:
                 try:
                     driver.quit()
-                except:
+                except Exception as e:
+                    logger.error(f"Error quitting driver for {url}: {e}")
                     pass
 
     # Main comprehensive crawling loop
@@ -948,6 +958,26 @@ def web_scraping(request):
     return render(request, 'scraper/web_scraping.html', {'scraped_data': scraped_data})
 
 def url_data(request, url_slug):
-    # This is a placeholder function to avoid the AttributeError
-    # In a real application, you would implement the logic to display data for a specific URL
-    return HttpResponse(f"Data for URL slug: {url_slug}")
+    from django.utils.text import slugify
+    
+    all_pages = ScrapedPage.objects.all()
+    entries = []
+    url = ''
+    for page in all_pages:
+        if slugify(page.url) == url_slug:
+            if not url:
+                url = page.url
+            entries.append({
+                'HeadingTag': page.title,
+                'Content': page.content,
+                'WordCount': page.word_count
+            })
+
+    if not entries:
+        return render(request, 'scraper/no_data.html')
+
+    context = {
+        'url': url,
+        'entries': entries
+    }
+    return render(request, 'scraper/url_data.html', context)

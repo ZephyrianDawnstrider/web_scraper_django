@@ -13,6 +13,7 @@
 
 <div id="progress">
     <p>Status: <span id="status">idle</span></p>
+    <progress id="progress-bar" max="100" value="0"></progress>
     <p>Total URLs: <span id="total_urls">0</span></p>
     <p>Processed: <span id="current_index">0</span></p>
     <p>Current URL: <span id="current_url"></span></p>
@@ -46,6 +47,7 @@
     document.addEventListener('DOMContentLoaded', function() {
         const form = document.querySelector('form');
         const progress = document.getElementById('progress');
+        const progressBar = document.getElementById('progress-bar');
         const statusEl = document.getElementById('status');
         const totalUrlsEl = document.getElementById('total_urls');
         const currentIndexEl = document.getElementById('current_index');
@@ -76,8 +78,14 @@
                     currentIndexEl.textContent = data.current_index;
                     currentUrlEl.textContent = data.current_url;
 
+                    if (data.total_urls > 0) {
+                        const percentage = (data.current_index / data.total_urls) * 100;
+                        progressBar.value = percentage;
+                    }
+
                     if (data.status === 'completed') {
                         clearInterval(interval);
+                        progressBar.value = 100;
                         location.reload(); // Reload to show the scraped data
                     }
                 });
