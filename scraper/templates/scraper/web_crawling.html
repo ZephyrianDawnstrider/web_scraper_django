@@ -1,0 +1,162 @@
+{% extends "scraper/base.html" %}
+
+{% block title %}Web Crawling{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 800px; margin: 50px auto; background: white; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-radius: 8px;">
+    <h1 style="text-align: center; color: #333;">Web Crawling</h1>
+    <form id="scrapeForm" method="post" style="display: flex; flex-direction: column; gap: 20px;">
+        {% csrf_token %}
+        <label for="url" style="font-weight: bold; color: #555;">Enter URL to crawl:</label>
+        <input type="text" id="url" name="url" required style="padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box;" />
+        <label class="checkbox-label" style="display: flex; align-items: center; font-weight: normal; color: #555;">
+            <input type="checkbox" name="show_common" style="transform: scale(1.2); margin-right: 10px;" /> Show common data separately
+        </label>
+        <input type="submit" value="Start Crawling" style="background-color: #28a745; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 4px; cursor: pointer; transition: background-color 0.3s ease;" onmouseover="this.style.backgroundColor='#0056b3'" onmouseout="this.style.backgroundColor='#28a745'" />
+    </form>
+<div id="loader" style="display:none; text-align:center; margin-top:20px;">
+    <p>Crawling in progress, please wait...</p>
+</div>
+
+<div id="progressContainer" style="display:none; margin-top: 20px;">
+    <div style="background-color: #e0e0e0; border-radius: 4px; height: 25px; width: 100%; overflow: hidden; border: 1px solid #ccc;">
+        <div id="progressBar" style="background-color: #28a745; height: 100%; width: 0%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;"></div>
+    </div>
+    <p id="progressText" style="margin-top: 15px; font-weight: bold; color: #333; font-size: 14px;">Starting...</p>
+    <div id="progressDetails" style="margin-top: 10px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; border: 1px solid #dee2e6;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+            <span><strong>Current Page:</strong> <span id="currentPage">0</span></span>
+            <span><strong>Total Pages:</strong> <span id="totalPages">0</span></span>
+        </div>
+        <div style="margin-bottom: 5px;">
+            <strong>Processing:</strong> <span id="currentUrl" style="font-family: monospace; font-size: 12px; color: #666;">Waiting...</span>
+        </div>
+        <div>
+            <strong>Status:</strong> <span id="statusText">Initializing...</span>
+        </div>
+    </div>
+</div>
+
+{% if results %}
+<div id="results" style="margin-top: 30px;">
+    <h2>Crawling Results</h2>
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="background-color: #f2f2f2;">
+                <th style="padding: 10px; border: 1px solid #ddd;">URL</th>
+                <th style="padding: 10px; border: 1px solid #ddd;">Page Name</th>
+                <th style="padding: 10px; border: 1px solid #ddd;">Heading/Tag</th>
+                <th style="padding: 10px; border: 1px solid #ddd;">Content</th>
+                <th style="padding: 10px; border: 1px solid #ddd;">Word Count</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in results %}
+            <tr>
+                <td style="padding: 10px; border: 1px solid #ddd;"><a href="{{ item.URL }}" target="_blank">{{ item.URL }}</a></td>
+                <td style="padding: 10px; border: 1px solid #ddd;">{{ item.PageName }}</td>
+                <td style="padding: 10px; border: 1px solid #ddd;">{{ item.HeadingTag }}</td>
+                <td style="padding: 10px; border: 1px solid #ddd;">{{ item.Content }}</td>
+                <td style="padding: 10px; border: 1px solid #ddd;">{{ item.WordCount }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <a href="{% url 'scraper:download' %}?type=crawling" class="btn-download" style="display: inline-block; margin-top: 20px; background-color: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">Download Excel</a>
+</div>
+{% endif %}
+
+</div>
+
+<script>
+document.getElementById('scrapeForm').addEventListener('submit', function(event) {
+    event.preventDefault();
+
+    const form = this;
+    const formData = new FormData(form);
+
+    // Hide form and show progress container
+    form.style.display = 'none';
+    const progressContainer = document.getElementById('progressContainer');
+    progressContainer.style.display = 'block';
+
+    // Start scraping by sending POST request via fetch
+    fetch("", {
+        method: "POST",
+        headers: {
+            'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
+        },
+        body: formData
+    }).then(response => response.json())
+    .then(data => {
+        if (data.status === 'started') {
+            // Start polling progress
+            pollProgress();
+        } else {
+            alert('Failed to start crawling.');
+            form.style.display = 'flex';
+            progressContainer.style.display = 'none';
+        }
+    }).catch(error => {
+        alert('Error starting crawling.');
+        form.style.display = 'flex';
+        progressContainer.style.display = 'none';
+    });
+});
+
+function pollProgress() {
+    fetch("{% url 'scraper:scrape_progress' %}")
+    .then(response => response.json())
+    .then(data => {
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const currentPage = document.getElementById('currentPage');
+        const totalPages = document.getElementById('totalPages');
+        const currentUrl = document.getElementById('currentUrl');
+        const statusText = document.getElementById('statusText');
+
+        if (data.status === 'running') {
+            const total = data.total_urls || 1;
+            const current = data.current_index || 0;
+            const percent = Math.min(100, Math.floor((current / total) * 100));
+            
+            // Update progress bar
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = percent + '%';
+
+            // Update current URL
+            const currentUrlText = data.current_url || 'Loading...';
+            const displayUrl = currentUrlText.length > 80 ? currentUrlText.substring(0, 80) + '...' : currentUrlText;
+            
+            // Update all progress elements
+            progressText.textContent = `Processing page ${current} of ${total}`;
+            currentPage.textContent = current;
+            totalPages.textContent = total;
+            currentUrl.textContent = displayUrl;
+            statusText.textContent = 'Crawling pages...';
+
+            setTimeout(pollProgress, 500);
+        } else if (data.status === 'completed') {
+            progressBar.style.width = '100%';
+            progressBar.textContent = '100%';
+            progressText.textContent = 'Crawling completed. Reloading...';
+            statusText.textContent = 'Completed successfully!';
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        } else if (data.status === 'started') {
+            progressText.textContent = 'Initializing scraper...';
+            statusText.textContent = 'Starting up...';
+            setTimeout(pollProgress, 500);
+        } else {
+            progressText.textContent = 'Idle.';
+            statusText.textContent = 'Waiting for input...';
+        }
+    }).catch(error => {
+        console.error('Error fetching progress:', error);
+        document.getElementById('statusText').textContent = 'Connection error, retrying...';
+        setTimeout(pollProgress, 2000);
+    });
+}
+</script>
+{% endblock %}

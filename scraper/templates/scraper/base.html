@@ -42,8 +42,20 @@
             color: #ccc;
             font-weight: 600;
         }
-        #sidebar nav ul li:hover {
-            color: #ff6600;
+        #sidebar nav ul li a {
+            color: #ccc;
+            text-decoration: none;
+            display: block;
+            padding: 10px 15px;
+            border-radius: 4px;
+        }
+        #sidebar nav ul li a:hover {
+            background-color: #ff6600;
+            color: white;
+        }
+        #sidebar nav ul li.active a {
+            background-color: #ff6600;
+            color: white;
         }
         #navbar {
             height: 60px;
@@ -64,82 +76,6 @@
             padding: 20px;
             background-color: white;
         }
-        /* Collapsible styles */
-        .collapsible {
-            background-color: #2c2c3e;
-            color: white;
-            cursor: pointer;
-            padding: 10px 15px;
-            width: 100%;
-            border: none;
-            text-align: left;
-            outline: none;
-            font-size: 16px;
-            font-weight: 600;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-radius: 4px;
-            margin-bottom: 5px;
-        }
-        .collapsible:hover {
-            background-color: #ff6600;
-            color: white;
-        }
-        .collapsible:after {
-            content: '\25BC'; /* Down arrow */
-            font-size: 12px;
-            transition: transform 0.3s ease;
-        }
-        .collapsible.active:after {
-            transform: rotate(180deg); /* Up arrow */
-        }
-        .content-collapsible {
-            padding-left: 15px;
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.3s ease;
-            margin-bottom: 10px;
-        }
-        .content-collapsible a {
-            display: block;
-            padding: 5px 0;
-            color: #ccc;
-            text-decoration: none;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .content-collapsible a:hover {
-            color: #ff6600;
-        }
-        /* Tooltip */
-        .tooltip {
-            position: relative;
-            display: inline-block;
-        }
-        .tooltip .tooltiptext {
-            visibility: hidden;
-            width: max-content;
-            max-width: 300px;
-            background-color: #555;
-            color: #fff;
-            text-align: center;
-            border-radius: 6px;
-            padding: 5px 8px;
-            position: absolute;
-            z-index: 1;
-            bottom: 125%;
-            left: 50%;
-            margin-left: -150px;
-            opacity: 0;
-            transition: opacity 0.3s;
-            word-wrap: break-word;
-        }
-        .tooltip:hover .tooltiptext {
-            visibility: visible;
-            opacity: 1;
-        }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
@@ -148,42 +84,10 @@
         <div class="logo">CHL Softech</div>
         <nav>
             <ul>
-                <li><a href=" {% url 'scraper:index' %} ">Home</a></li>
-                <li>
-                    <button type="button" class="collapsible">Scraped Data</button>
-                    <div class="content-collapsible">
-                        <button type="button" class="collapsible">Language</button>
-                        <div class="content-collapsible">
-                            {% for lang, urls in language_groups.items %}
-                                <div class="tooltip">
-                                    <a href="{% url 'scraper:view_data' %}" title="{{ lang }}">{{ lang }}</a>
-                                    <span class="tooltiptext">{{ lang }}</span>
-                                </div>
-                                <div class="content-collapsible">
-                                    {% for url in urls %}
-                                        <a href="{% url 'scraper:url_data' url|slugify %}" title="{{ url_headings|get_item:url }}">{{ url_headings|get_item:url }}</a>
-                                    {% endfor %}
-                                </div>
-                            {% endfor %}
-                        </div>
-                        <button type="button" class="collapsible">Type</button>
-                        <div class="content-collapsible">
-                            {% for type, urls in type_groups.items %}
-                                <div class="tooltip">
-                                    <a href="{% url 'scraper:view_data' %}" title="{{ type }}">{{ type }}</a>
-                                    <span class="tooltiptext">{{ type }}</span>
-                                </div>
-                                <div class="content-collapsible">
-                                    {% for url in urls %}
-                                        <a href="{% url 'scraper:url_data' url|slugify %}" title="{{ url_headings|get_item:url }}">{{ url_headings|get_item:url }}</a>
-                                    {% endfor %}
-                                </div>
-                            {% endfor %}
-                        </div>
-                        <a href="{% url 'scraper:view_data' %}">All</a>
-                    </div>
-                </li>
-                <li><a href="{% url 'scraper:download' %}">Download Excel</a></li>
+                <li class="{% if request.path == '/' %}active{% endif %}"><a href="{% url 'scraper:home' %}">Home</a></li>
+                <li class="{% if 'site-mapping' in request.path %}active{% endif %}"><a href="{% url 'scraper:site_mapping' %}">Site Mapping</a></li>
+                <li class="{% if 'web-crawling' in request.path %}active{% endif %}"><a href="{% url 'scraper:web_crawling' %}">Web Crawling</a></li>
+                <li><a href="#" id="downloadLink">Download</a></li>
             </ul>
         </nav>
     </div>
@@ -197,20 +101,15 @@
         </div>
     </div>
     <script>
-        // Collapsible functionality
-        document.addEventListener('DOMContentLoaded', function() {
-            var coll = document.getElementsByClassName("collapsible");
-            for (var i = 0; i < coll.length; i++) {
-                coll[i].addEventListener("click", function() {
-                    this.classList.toggle("active");
-                    var content = this.nextElementSibling;
-                    if (content.style.maxHeight) {
-                        content.style.maxHeight = null;
-                    } else {
-                        content.style.maxHeight = content.scrollHeight + "px";
-                    }
-                });
+        document.getElementById('downloadLink').addEventListener('click', function(event) {
+            event.preventDefault();
+            let downloadUrl = "{% url 'scraper:download' %}";
+            if (window.location.pathname.includes('site-mapping')) {
+                downloadUrl += "?type=sitemap";
+            } else if (window.location.pathname.includes('web-crawling')) {
+                downloadUrl += "?type=crawling";
             }
+            window.location.href = downloadUrl;
         });
     </script>
 </body>

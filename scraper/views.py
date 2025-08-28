@@ -245,8 +245,40 @@ scrape_progress = {
     'current_url': ''
 }
 
-def index(request):
-    global show_common_data, scrape_progress
+def home(request):
+    return render(request, 'scraper/home.html')
+
+def site_mapping(request):
+    results = None
+    if request.method == 'POST':
+        url = request.POST.get('url')
+        if url:
+            scrape_progress['status'] = 'started'
+            scrape_progress['total_urls'] = 0
+            scrape_progress['current_index'] = 0
+            scrape_progress['current_url'] = ''
+            
+            # Start scraping in background thread
+            def scrape_and_save():
+                crawl_site(url)
+                save_to_excel('sitemap_results.xlsx')
+                scrape_progress['status'] = 'completed'
+            
+            thread = threading.Thread(target=scrape_and_save)
+            thread.start()
+            
+            # Return JSON response to indicate scraping started
+            return JsonResponse({'status': 'started'})
+    else:
+        # Check if results exist from a previous run
+        if os.path.exists(os.path.join(settings.BASE_DIR, 'sitemap_results.xlsx')):
+            df = pd.read_excel(os.path.join(settings.BASE_DIR, 'sitemap_results.xlsx'))
+            results = df.to_dict('records')
+
+    return render(request, 'scraper/site_mapping.html', {'results': results})
+
+def web_crawling(request):
+    results = None
     if request.method == 'POST':
         url = request.POST.get('url')
         show_common_data = request.POST.get('show_common') == 'on'
@@ -259,7 +291,7 @@ def index(request):
             # Start scraping in background thread
             def scrape_and_save():
                 crawl_site(url)
-                save_to_excel()
+                save_to_excel('crawling_results.xlsx')
                 scrape_progress['status'] = 'completed'
             
             thread = threading.Thread(target=scrape_and_save)
@@ -267,7 +299,15 @@ def index(request):
             
             # Return JSON response to indicate scraping started
             return JsonResponse({'status': 'started'})
-    return render(request, 'scraper/index.html')
+    else:
+        # Check if results exist from a previous run
+        if os.path.exists(os.path.join(settings.BASE_DIR, 'crawling_results.xlsx')):
+            df = pd.read_excel(os.path.join(settings.BASE_DIR, 'crawling_results.xlsx'))
+            results = df.to_dict('records')
+
+    return render(request, 'scraper/web_crawling.html', {'results': results})
+
+
 
 def discover_all_urls(start_url, driver):
     """Comprehensive URL discovery system to find ALL pages on a website"""
@@ -339,11 +379,10 @@ def comprehensive_crawl_site(start_url):
     progress_lock = threading.Lock()  # Add progress lock
     
     # Increase limits for comprehensive crawling
-    max_workers = min(8, multiprocessing.cpu_count() * 2)  # Slightly reduced for stability
-    max_urls = 1000  # Increased limit for comprehensive crawling
+    max_workers = min(24, multiprocessing.cpu_count() * 4)  # Slightly reduced for stability
     max_depth = 15   # Increased depth
     logger.info(f"Using {max_workers} threads for crawling")
-    logger.info(f"Starting comprehensive crawling with {max_workers} threads, max {max_urls} URLs, depth {max_depth}")
+    logger.info(f"Starting comprehensive crawling with {max_workers} threads, depth {max_depth}")
     
     base_netloc = urlparse(start_url).netloc
     url_queue = Queue()
@@ -612,7 +651,7 @@ def comprehensive_crawl_site(start_url):
     # Main comprehensive crawling loop
     processed_count = 0
     
-    while not url_queue.empty() and processed_count < max_urls:
+    while not url_queue.empty():
         # Get batch of URLs to process
         current_batch = []
         batch_size = min(max_workers, url_queue.qsize())
@@ -640,7 +679,7 @@ def comprehensive_crawl_site(start_url):
                     # Add new URLs to queue (with priority for shallow depths)
                     new_urls.sort(key=lambda x: x[1])  # Sort by depth
                     for new_url_data in new_urls:
-                        if processed_count + url_queue.qsize() < max_urls:
+                        if processed_count + url_queue.qsize():
                             url_queue.put(new_url_data)
                     
                 except Exception as e:
@@ -825,7 +864,14 @@ def view_data(request):
         return render(request, 'scraper/view.html', context)
 
 def download(request):
-    filename = 'scraped_data.xlsx'
+    download_type = request.GET.get('type')
+    if download_type == 'sitemap':
+        filename = 'sitemap_results.xlsx'
+    elif download_type == 'crawling':
+        filename = 'crawling_results.xlsx'
+    else:
+        filename = 'scraped_data.xlsx'
+
     filepath = os.path.join(settings.BASE_DIR, filename)
     if os.path.exists(filepath):
         return FileResponse(open(filepath, 'rb'), as_attachment=True)

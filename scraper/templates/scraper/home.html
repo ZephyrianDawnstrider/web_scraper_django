@@ -1,0 +1,13 @@
+{% extends "scraper/base.html" %}
+
+{% block title %}Home{% endblock %}
+
+{% block content %}
+<div class="container" style="text-align: center; margin-top: 50px;">
+    <h1 style="color: #333;">Choose a Tool</h1>
+    <div style="margin-top: 30px;">
+        <a href="{% url 'scraper:site_mapping' %}" class="btn-large" style="background-color: #007bff; color: white; padding: 20px 40px; text-decoration: none; border-radius: 8px; font-size: 24px; margin: 10px;">Site Mapping</a>
+        <a href="{% url 'scraper:web_crawling' %}" class="btn-large" style="background-color: #28a745; color: white; padding: 20px 40px; text-decoration: none; border-radius: 8px; font-size: 24px; margin: 10px;">Web Crawling</a>
+    </div>
+</div>
+{% endblock %}
