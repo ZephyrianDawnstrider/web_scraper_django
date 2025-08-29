@@ -37,6 +37,20 @@
     </div>
 </div>
 
+<div id="processedUrlsContainer" style="margin-top: 20px; display: none;">
+    <h3 style="color: #333;">Processed URLs</h3>
+    <div id="processedUrlsList" style="max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; padding: 10px; background-color: #f8f9fa; border-radius: 4px;">
+        <!-- Processed URLs will be dynamically inserted here -->
+    </div>
+</div>
+
+<div id="logsContainer" style="margin-top: 20px; display: none;">
+    <h3 style="color: #333;">Logs</h3>
+    <pre id="logsContent" style="max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; padding: 10px; background-color: #f8f9fa; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 12px; color: #666;">
+        <!-- Logs will be dynamically inserted here -->
+    </pre>
+</div>
+
 {% if results %}
 <div id="results" style="margin-top: 30px;">
     <h2>Crawling Results</h2>
@@ -114,21 +128,43 @@ function pollProgress() {
         const totalPages = document.getElementById('totalPages');
         const currentUrl = document.getElementById('currentUrl');
         const statusText = document.getElementById('statusText');
+        const processedUrlsContainer = document.getElementById('processedUrlsContainer');
+        const processedUrlsList = document.getElementById('processedUrlsList');
+        const logsContainer = document.getElementById('logsContainer');
+        const logsContent = document.getElementById('logsContent');
+
+        if (data.status === 'running' || data.status === 'completed') {
+            processedUrlsContainer.style.display = 'block';
+            logsContainer.style.display = 'block';
+
+            if (data.processed_urls) {
+                processedUrlsList.innerHTML = data.processed_urls.map(item => {
+                    let statusColor = 'black';
+                    if (item.Status === 'completed') statusColor = 'green';
+                    if (item.Status === 'timed_out') statusColor = 'orange';
+                    if (item.Status === 'page_too_large' || item.Status === 'no_extractable_content') statusColor = 'gray';
+                    return `<div><span style="color: ${statusColor}; font-weight: bold;">[${item.Status}]</span> ${item.URL}</div>`;
+                }).join('');
+                processedUrlsList.scrollTop = processedUrlsList.scrollHeight;
+            }
+
+            if (data.logs) {
+                logsContent.textContent = data.logs.join('\n');
+                logsContent.scrollTop = logsContent.scrollHeight;
+            }
+        }
 
         if (data.status === 'running') {
             const total = data.total_urls || 1;
             const current = data.current_index || 0;
             const percent = Math.min(100, Math.floor((current / total) * 100));
             
-            // Update progress bar
             progressBar.style.width = percent + '%';
             progressBar.textContent = percent + '%';
 
-            // Update current URL
             const currentUrlText = data.current_url || 'Loading...';
             const displayUrl = currentUrlText.length > 80 ? currentUrlText.substring(0, 80) + '...' : currentUrlText;
             
-            // Update all progress elements
             progressText.textContent = `Processing page ${current} of ${total}`;
             currentPage.textContent = current;
             totalPages.textContent = total;

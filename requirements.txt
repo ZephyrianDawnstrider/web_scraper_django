@@ -1,5 +1,6 @@
- Django>=4.0
+jango>=4.0
 selenium
 beautifulsoup4
 pandas
 openpyxl
+requests

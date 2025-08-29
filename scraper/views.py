@@ -21,15 +21,28 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from bs4 import BeautifulSoup
 import pandas as pd
+import re
 
 # Setup logger
 logger = logging.getLogger('scraper')
+log_records = []
 if not logger.hasHandlers():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    # Custom handler to capture logs
+    class ListHandler(logging.Handler):
+        def __init__(self, log_list):
+            super().__init__()
+            self.log_list = log_list
+        def emit(self, record):
+            self.log_list.append(self.format(record))
+    
+    handler = ListHandler(log_records)
+    logger.addHandler(handler)
 
 # Global variables to store scraped data and common data flag
 scraped_data = []
 show_common_data = False
+processed_urls_status = []
 
 # Progress tracking variables
 scrape_progress = {
@@ -184,25 +197,43 @@ def save_to_excel(filename='scraped_data.xlsx'):
                 grouped[url] = []
             grouped[url].append(entry)
 
+        # Group filtered_data by URL
+        grouped = {}
+        for entry in filtered_data:
+            url = entry['URL']
+            if url not in grouped:
+                grouped[url] = []
+            grouped[url].append(entry)
+
+        summary = [] # Moved initialization outside writer block
+        for url, entries in grouped.items():
+            df = pd.DataFrame(entries)
+            total_words = df['Word Count'].sum()
+            summary.append({'URL': url, 'Total Words': total_words})
+
         with pd.ExcelWriter(filepath) as writer:
-            summary = []
+            # Write summary sheet first
+            df_summary = pd.DataFrame(summary)
+            df_summary.to_excel(writer, sheet_name='Summary', index=False)
+
             for url, entries in grouped.items():
                 df = pd.DataFrame(entries)
-                total_words = df['Word Count'].sum()
-                sheet_name = url.replace('http://', '').replace('https://', '').replace('/', '_')[:31]
+                sheet_name = slugify(url)[:31]
+                # Ensure uniqueness if slugify produces duplicates for different URLs
+                original_sheet_name = sheet_name
+                counter = 1
+                while sheet_name in writer.sheets: # Check if sheet name already exists
+                    sheet_name = f"{original_sheet_name[:28]}_{counter}" # Truncate to make space for counter
+                    counter += 1
+
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
                 worksheet = writer.sheets[sheet_name]
-                worksheet.write(len(df) + 1, 0, 'Total Words')
-                worksheet.write(len(df) + 1, 4, total_words)
-                summary.append({'URL': url, 'Total Words': total_words})
+                worksheet.cell(row=len(df) + 1, column=1, value='Total Words')
+                worksheet.cell(row=len(df) + 1, column=5, value=total_words)
 
             # Write common data sheet
             df_common = pd.DataFrame(common_data)
             df_common.to_excel(writer, sheet_name='Common Data', index=False)
-
-            # Write summary sheet
-            df_summary = pd.DataFrame(summary)
-            df_summary.to_excel(writer, sheet_name='Summary', index=False)
     else:
         # Group data by URL
         grouped = {}
@@ -212,25 +243,34 @@ def save_to_excel(filename='scraped_data.xlsx'):
                 grouped[url] = []
             grouped[url].append(entry)
 
+        summary = [] # Moved initialization outside writer block
+        for url, entries in grouped.items():
+            df = pd.DataFrame(entries)
+            # Calculate total words for this URL
+            total_words = df['Word Count'].sum()
+            # Add to summary
+            summary.append({'URL': url, 'Total Words': total_words})
+
         with pd.ExcelWriter(filepath) as writer:
-            summary = []
+            # Write summary sheet first
+            df_summary = pd.DataFrame(summary)
+            df_summary.to_excel(writer, sheet_name='Summary', index=False)
+
             for url, entries in grouped.items():
                 df = pd.DataFrame(entries)
-                # Calculate total words for this URL
-                total_words = df['Word Count'].sum()
                 # Write data to sheet named by URL (sanitized)
-                sheet_name = url.replace('http://', '').replace('https://', '').replace('/', '_')[:31]
+                sheet_name = slugify(url)[:31]
+                # Ensure uniqueness if slugify produces duplicates for different URLs
+                original_sheet_name = sheet_name
+                counter = 1
+                while sheet_name in writer.sheets: # Check if sheet name already exists
+                    sheet_name = f"{original_sheet_name[:28]}_{counter}" # Truncate to make space for counter
+                    counter += 1
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
                 # Write total words at bottom of sheet
                 worksheet = writer.sheets[sheet_name]
-                worksheet.write(len(df) + 1, 0, 'Total Words')
-                worksheet.write(len(df) + 1, 4, total_words)
-                # Add to summary
-                summary.append({'URL': url, 'Total Words': total_words})
-
-            # Write summary sheet
-            df_summary = pd.DataFrame(summary)
-            df_summary.to_excel(writer, sheet_name='Summary', index=False)
+                worksheet.cell(row=len(df) + 1, column=1, value='Total Words')
+                worksheet.cell(row=len(df) + 1, column=5, value=total_words)
 
 from django.shortcuts import redirect
 
@@ -248,41 +288,216 @@ scrape_progress = {
 def home(request):
     return render(request, 'scraper/home.html')
 
+def simple_site_mapping(start_url):
+    """Simple site mapping function that discovers URLs through sitemaps and robots.txt."""
+    logger.info(f"Starting simple site mapping for {start_url}")
+
+    driver = create_driver()
+    base_netloc = urlparse(start_url).netloc
+    discovered_urls = set()
+    site_map_data = []
+
+    try:
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        def parse_sitemap_content(content, sitemap_url_source):
+            """Parses sitemap content, trying XML first, then plain text."""
+            urls_found_in_sitemap = set()
+            try:
+                # Try parsing as XML
+                soup = BeautifulSoup(content, 'xml')
+                loc_elements = soup.find_all('loc')
+                if loc_elements:
+                    logger.info(f"Successfully parsed {sitemap_url_source} as XML. Found {len(loc_elements)} <loc> elements.")
+                    for loc in loc_elements:
+                        url = loc.text.strip()
+                        if is_valid_url(url, base_netloc):
+                            urls_found_in_sitemap.add(url)
+                            logger.debug(f"Added valid URL from {sitemap_url_source} (XML): {url}")
+                        else:
+                            logger.debug(f"Skipped invalid URL from {sitemap_url_source} (XML): {url}")
+                    return urls_found_in_sitemap
+                else:
+                    logger.info(f"No <loc> elements found in {sitemap_url_source} when parsed as XML. Trying plain text.")
+            except Exception as e:
+                logger.info(f"Failed to parse {sitemap_url_source} as XML: {e}. Trying plain text.")
+
+            # Fallback to plain text parsing
+            sitemap_lines = content.splitlines()
+            logger.info(f"Attempting to parse {sitemap_url_source} as plain text. Found {len(sitemap_lines)} lines.")
+            for line in sitemap_lines:
+                url_match = re.match(r'^(https?://\S+)', line.strip())
+                if url_match:
+                    url = url_match.group(1)
+                    if is_valid_url(url, base_netloc):
+                        urls_found_in_sitemap.add(url)
+                        logger.debug(f"Added valid URL from {sitemap_url_source} (plain text): {url}")
+                    else:
+                        logger.debug(f"Skipped invalid URL from {sitemap_url_source} (plain text): {url}")
+                else:
+                    logger.debug(f"No URL found in line from {sitemap_url_source} (plain text): {line.strip()}")
+            return urls_found_in_sitemap
+
+        # 1. Check robots.txt for sitemap references first
+        try:
+            robots_url = urljoin(start_url, '/robots.txt')
+            logger.info(f"Checking robots.txt: {robots_url}")
+            response = session.get(robots_url, timeout=10)
+            logger.info(f"robots.txt response status: {response.status_code}, content-type: {response.headers.get('content-type', '')}")
+            if response.status_code == 200:
+                robots_content = response.text
+                sitemap_matches = re.findall(r'Sitemap:\s*(.+)', robots_content, re.IGNORECASE)
+                if sitemap_matches:
+                    logger.info(f"Found {len(sitemap_matches)} sitemap references in robots.txt")
+                    for sitemap_url_from_robots in sitemap_matches:
+                        sitemap_url_from_robots = sitemap_url_from_robots.strip()
+                        try:
+                            logger.info(f"Fetching sitemap from robots.txt: {sitemap_url_from_robots}")
+                            sitemap_response = session.get(sitemap_url_from_robots, timeout=10)
+                            logger.info(f"Sitemap from robots.txt response status: {sitemap_response.status_code}, content-type: {sitemap_response.headers.get('content-type', '')}")
+                            if sitemap_response.status_code == 200:
+                                new_urls = parse_sitemap_content(sitemap_response.text, f"robots.txt sitemap ({sitemap_url_from_robots})")
+                                discovered_urls.update(new_urls)
+                                logger.info(f"Added {len(new_urls)} URLs from robots.txt sitemap {sitemap_url_from_robots}. Total discovered: {len(discovered_urls)}")
+                            else:
+                                logger.warning(f"Failed to fetch sitemap from robots.txt {sitemap_url_from_robots}: Status {sitemap_response.status_code}")
+                        except Exception as e:
+                            logger.warning(f"Error processing robots.txt sitemap {sitemap_url_from_robots}: {e}")
+                else:
+                    logger.info("No sitemap references found in robots.txt")
+            else:
+                logger.warning(f"Failed to fetch robots.txt: Status {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Error checking robots.txt: {e}")
+
+        # 2. Check common sitemap locations if no URLs found yet or if robots.txt didn't help much
+        if not discovered_urls: # Only check common locations if robots.txt didn't yield results
+            sitemap_urls_common = [
+                urljoin(start_url, '/sitemap.xml'),
+                urljoin(start_url, '/sitemap_index.xml'),
+                urljoin(start_url, '/sitemaps.xml'),
+                urljoin(start_url, '/sitemap/sitemap.xml')
+            ]
+            logger.info("Checking common sitemap locations...")
+            for sitemap_url_common in sitemap_urls_common:
+                try:
+                    logger.info(f"Fetching common sitemap: {sitemap_url_common}")
+                    response = session.get(sitemap_url_common, timeout=10)
+                    logger.info(f"Common sitemap response status: {response.status_code}, content-type: {response.headers.get('content-type', '')}")
+                    if response.status_code == 200:
+                        new_urls = parse_sitemap_content(response.text, f"common sitemap ({sitemap_url_common})")
+                        discovered_urls.update(new_urls)
+                        logger.info(f"Added {len(new_urls)} URLs from common sitemap {sitemap_url_common}. Total discovered: {len(discovered_urls)}")
+                    else:
+                        logger.warning(f"Failed to fetch common sitemap {sitemap_url_common}: Status {response.status_code}")
+                except Exception as e:
+                    logger.warning(f"Error fetching common sitemap {sitemap_url_common}: {e}")
+
+        # 3. Always add the start URL if not already discovered
+        if start_url not in discovered_urls:
+            discovered_urls.add(start_url)
+            logger.info(f"Added start URL: {start_url}")
+
+        # 4. Get basic information for each discovered URL (just page titles)
+        logger.info(f"Processing {len(discovered_urls)} discovered URLs...")
+        for i, url in enumerate(discovered_urls):
+            try:
+                logger.info(f"Processing URL {i+1}/{len(discovered_urls)}: {url}")
+                driver.get(url)
+                soup = BeautifulSoup(driver.page_source, 'html.parser')
+                page_name = get_page_name(soup)
+
+                site_map_data.append({
+                    'URL': url,
+                    'PageName': page_name
+                })
+            except Exception as e:
+                logger.error(f"Error processing {url}: {e}")
+                site_map_data.append({
+                    'URL': url,
+                    'PageName': 'Unknown'
+                })
+
+        logger.info(f"Simple site mapping completed. Found {len(discovered_urls)} URLs")
+        if len(discovered_urls) <= 1:
+            logger.info("Only one or no URLs found. This is normal for sites without sitemaps or with issues.")
+            logger.info("For comprehensive site crawling, please use the Web Crawling feature instead.")
+        return site_map_data
+
+    except Exception as e:
+        logger.error(f"Critical error in simple site mapping: {e}")
+        return []
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+
 def site_mapping(request):
+    """Site mapping view that uses simple site mapping approach"""
     results = None
-    if request.method == 'POST':
-        url = request.POST.get('url')
-        if url:
-            scrape_progress['status'] = 'started'
-            scrape_progress['total_urls'] = 0
-            scrape_progress['current_index'] = 0
-            scrape_progress['current_url'] = ''
-            
-            # Start scraping in background thread
-            def scrape_and_save():
-                crawl_site(url)
-                save_to_excel('sitemap_results.xlsx')
-                scrape_progress['status'] = 'completed'
-            
-            thread = threading.Thread(target=scrape_and_save)
-            thread.start()
-            
-            # Return JSON response to indicate scraping started
-            return JsonResponse({'status': 'started'})
-    else:
-        # Check if results exist from a previous run
-        if os.path.exists(os.path.join(settings.BASE_DIR, 'sitemap_results.xlsx')):
-            df = pd.read_excel(os.path.join(settings.BASE_DIR, 'sitemap_results.xlsx'))
-            results = df.to_dict('records')
+    try:
+        if request.method == 'POST':
+            url = request.POST.get('url')
+            if url:
+                scrape_progress['status'] = 'started'
+                scrape_progress['total_urls'] = 0
+                scrape_progress['current_index'] = 0
+                scrape_progress['current_url'] = ''
+                
+                # Start mapping in background thread
+                def map_and_save():
+                    # Use local data instead of global to avoid conflicts
+                    site_map_data = simple_site_mapping(url)
+                    if site_map_data:
+                        # Save site map data to Excel file
+                        filepath = os.path.join(settings.BASE_DIR, 'sitemap_results.xlsx')
+                        df = pd.DataFrame(site_map_data)
+                        df.to_excel(filepath, index=False)
+                        logger.info(f"Site map data saved to {filepath}")
+                    scrape_progress['status'] = 'completed' if site_map_data else 'failed'
+                
+                thread = threading.Thread(target=map_and_save)
+                thread.start()
+                
+                # Return JSON response to indicate mapping started
+                return JsonResponse({'status': 'started'})
+        else:
+            # Check if results exist from a previous run
+            if os.path.exists(os.path.join(settings.BASE_DIR, 'sitemap_results.xlsx')):
+                try:
+                    df = pd.read_excel(os.path.join(settings.BASE_DIR, 'sitemap_results.xlsx'))
+                    results = df.to_dict('records')
+                except Exception as e:
+                    logger.error(f"Error reading sitemap results: {e}")
+                    results = None
+    except Exception as e:
+        logger.error(f"Error in site_mapping view: {e}")
+        results = None
 
     return render(request, 'scraper/site_mapping.html', {'results': results})
 
 def web_crawling(request):
+    global log_records
     results = None
     if request.method == 'POST':
         url = request.POST.get('url')
         show_common_data = request.POST.get('show_common') == 'on'
         if url:
+            log_records.clear()
             scrape_progress['status'] = 'started'
             scrape_progress['total_urls'] = 0
             scrape_progress['current_index'] = 0
@@ -371,8 +586,9 @@ def discover_all_urls(start_url, driver):
 
 def comprehensive_crawl_site(start_url):
     """Comprehensive crawling system that finds and reads ALL pages"""
-    global scraped_data, scrape_progress
+    global scraped_data, scrape_progress, processed_urls_status
     scraped_data = []
+    processed_urls_status = []
     visited = set()
     visited_lock = threading.Lock()
     data_lock = threading.Lock()
@@ -461,6 +677,8 @@ def comprehensive_crawl_site(start_url):
             html = driver.page_source
             if len(html.encode('utf-8')) > MAX_PAGE_SIZE:
                 logger.warning(f"Page size too large, skipping: {url}")
+                with data_lock:
+                    processed_urls_status.append({'URL': url, 'Status': 'page_too_large'})
                 return []
 
             soup = BeautifulSoup(html, 'html.parser')
@@ -477,6 +695,14 @@ def comprehensive_crawl_site(start_url):
                         'Content': text,
                         'Word Count': len(text.split())
                     })
+                if content: # Only mark as completed if content was actually extracted
+                    processed_urls_status.append({'URL': url, 'Status': 'completed'})
+                else: # If no content extracted, but no other error, mark as no_extractable_content
+                    processed_urls_status.append({'URL': url, 'Status': 'no_extractable_content'})
+                if content: # Only mark as completed if content was actually extracted
+                    processed_urls_status.append({'URL': url, 'Status': 'completed'})
+                else: # If no content extracted, but no other error, mark as no_extractable_content
+                    processed_urls_status.append({'URL': url, 'Status': 'no_extractable_content'})
             
             # COMPREHENSIVE LINK DISCOVERY
             from selenium.webdriver.common.by import By
@@ -634,6 +860,8 @@ def comprehensive_crawl_site(start_url):
             
         except TimeoutException:
             logger.error(f"Timeout loading page {url}")
+            with data_lock:
+                processed_urls_status.append({'URL': url, 'Status': 'timed_out'})
             return []
         except WebDriverException as e:
             logger.error(f"WebDriver error at {url}: {e}")
@@ -696,8 +924,11 @@ def crawl_site(start_url):
     return comprehensive_crawl_site(start_url)
 
 def get_scrape_progress(request):
-    global scrape_progress
-    return JsonResponse(scrape_progress)
+    global scrape_progress, processed_urls_status, log_records
+    progress_data = scrape_progress.copy()
+    progress_data['processed_urls'] = processed_urls_status
+    progress_data['logs'] = log_records[-200:]
+    return JsonResponse(progress_data)
 
 from django.utils.text import slugify
 
